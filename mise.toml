@@ -1,0 +1,13 @@
+[tools]
+go = '1.24.9'
+golangci-lint = '2.14.0'
+vale = '3.25.1'
+
+# Points git at the tracked hooks in .githooks (commit message linting)
+# and fetches the Vale packages they use.
+[tasks.setup]
+description = "Install git hooks and Vale packages"
+run = [
+  "git config core.hooksPath .githooks",
+  "vale sync",
+]

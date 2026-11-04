@@ -1,0 +1,4 @@
+extends: Commitlint.Scope
+message: "Drop the scope '%s'; this project does not use commit scopes."
+raw:
+  - '(?<=^\w+\()[^()]+(?=\))'

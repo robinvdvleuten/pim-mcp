@@ -1,0 +1,19 @@
+#!/bin/sh
+# Lints the commit message with Vale (see .vale.ini).
+# Installed by `mise run setup`; bypass once with `git commit --no-verify`.
+set -e
+
+if ! command -v vale >/dev/null 2>&1; then
+  echo "commit-msg: Vale is not installed (https://vale.sh/docs/install)." >&2
+  echo "commit-msg: install it, or bypass once with 'git commit --no-verify'." >&2
+  exit 1
+fi
+
+root=$(git rev-parse --show-toplevel)
+cd "$root"
+
+# Packages are not tracked; fetch them on first use.
+[ -d .vale/styles/Commitlint ] || vale sync >/dev/null
+
+# Drop git's comment lines before linting.
+git stripspace --strip-comments < "$1" | vale --path=COMMIT_EDITMSG

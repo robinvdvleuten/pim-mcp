@@ -4,12 +4,14 @@ package integration
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/emersion/go-imap/v2"
 	"github.com/emersion/go-imap/v2/imapclient"
@@ -429,5 +431,240 @@ func TestMailSearchSaysSoWhenItStopsReading(t *testing.T) {
 	}
 	if !got.More {
 		t.Error("more = false, but part of the folder wasn't read")
+	}
+}
+
+const richMail = `From: Jan <jan@example.org>
+To: Me <me@example.org>, other@example.org
+Cc: Boss <boss@example.org>
+Reply-To: replies@example.org
+Subject: Notes
+Date: Wed, 04 Nov 2026 10:00:00 +0100
+Message-ID: <abc123@example.org>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="outer"
+
+--outer
+Content-Type: multipart/alternative; boundary="inner"
+
+--inner
+Content-Type: text/plain; charset=windows-1252
+Content-Transfer-Encoding: quoted-printable
+
+Caf=E9 at noon.
+--inner
+Content-Type: text/html; charset=utf-8
+
+<p>Caf&eacute; at noon.</p>
+--inner--
+--outer
+Content-Type: text/calendar; charset=utf-8; method=REQUEST
+
+BEGIN:VCALENDAR
+END:VCALENDAR
+--outer
+Content-Type: application/pdf; name="plan.pdf"
+Content-Disposition: attachment; filename="plan.pdf"
+Content-Transfer-Encoding: base64
+
+JVBERi0=
+--outer--
+`
+
+func firstMessageID(t *testing.T, session *mcp.ClientSession) string {
+	t.Helper()
+	found := callTool[mcpserver.SearchResult](t, session, "mail_search", map[string]any{"limit": 1})
+	if len(found.Messages) != 1 {
+		t.Fatalf("messages = %+v", found.Messages)
+	}
+	return found.Messages[0].ID
+}
+
+func TestMailGetReturnsHeadersBodyAndParts(t *testing.T) {
+	user := newMailbox(t)
+	seed(t, user, richMail)
+	session := mailSession(t, user)
+	id := firstMessageID(t, session)
+
+	got := callTool[mail.Content](t, session, "mail_get", map[string]any{"id": id})
+
+	if got.ID != id || got.Subject != "Notes" || got.MessageID != "abc123@example.org" {
+		t.Errorf("id %q, subject %q, message id %q", got.ID, got.Subject, got.MessageID)
+	}
+	if got.From != "Jan <jan@example.org>" {
+		t.Errorf("from = %q", got.From)
+	}
+	if !slices.Equal(got.To, []string{"Me <me@example.org>", "other@example.org"}) {
+		t.Errorf("to = %q", got.To)
+	}
+	if !slices.Equal(got.Cc, []string{"Boss <boss@example.org>"}) {
+		t.Errorf("cc = %q", got.Cc)
+	}
+	if !slices.Equal(got.ReplyTo, []string{"replies@example.org"}) {
+		t.Errorf("reply to = %q", got.ReplyTo)
+	}
+	if got.Date.Format(time.RFC3339) != "2026-11-04T10:00:00+01:00" {
+		t.Errorf("date = %s", got.Date)
+	}
+	if strings.TrimSpace(got.Body) != "Café at noon." || got.BodyType != "text/plain" || got.BodyTruncated {
+		t.Errorf("body = %q, type %q, truncated %v", got.Body, got.BodyType, got.BodyTruncated)
+	}
+	if !got.HasCalendar {
+		t.Error("has_calendar = false")
+	}
+
+	type partSummary struct{ path, mediaType, filename string }
+	var parts []partSummary
+	for _, part := range got.Parts {
+		parts = append(parts, partSummary{part.Path, part.MediaType, part.Filename})
+	}
+	want := []partSummary{
+		{"1.1", "text/plain", ""},
+		{"1.2", "text/html", ""},
+		{"2", "text/calendar", ""},
+		{"3", "application/pdf", "plan.pdf"},
+	}
+	if !slices.Equal(parts, want) {
+		t.Errorf("parts = %+v, want %+v", parts, want)
+	}
+}
+
+func TestMailGetFallsBackToHTML(t *testing.T) {
+	user := newMailbox(t)
+	seed(t, user, "From: a@example.org\nSubject: Html only\nDate: Mon, 02 Nov 2026 10:00:00 +0100\nMIME-Version: 1.0\nContent-Type: text/html; charset=utf-8\n\n<b>hello</b>\n")
+	session := mailSession(t, user)
+
+	got := callTool[mail.Content](t, session, "mail_get", map[string]any{"id": firstMessageID(t, session)})
+
+	if strings.TrimSpace(got.Body) != "<b>hello</b>" || got.BodyType != "text/html" {
+		t.Errorf("body = %q, type %q", got.Body, got.BodyType)
+	}
+}
+
+func TestMailGetWithoutReadableBody(t *testing.T) {
+	user := newMailbox(t)
+	seed(t, user, singlePartInvite)
+	session := mailSession(t, user)
+
+	got := callTool[mail.Content](t, session, "mail_get", map[string]any{"id": firstMessageID(t, session)})
+
+	if got.Body != "" || got.BodyType != "" {
+		t.Errorf("body = %q, type %q", got.Body, got.BodyType)
+	}
+	if !got.HasCalendar || len(got.Parts) != 1 {
+		t.Errorf("has_calendar = %v, parts = %+v", got.HasCalendar, got.Parts)
+	}
+}
+
+func TestMailGetTruncatesLongBodies(t *testing.T) {
+	user := newMailbox(t)
+	line := strings.Repeat("a", 75) + "\n"
+	seed(t, user, plainMail("Long", "a@example.org", "b@example.org", "Mon, 02 Nov 2026 10:00:00 +0100", strings.Repeat(line, 2000)))
+	session := mailSession(t, user)
+
+	got := callTool[mail.Content](t, session, "mail_get", map[string]any{"id": firstMessageID(t, session)})
+
+	if !got.BodyTruncated {
+		t.Error("body_truncated = false")
+	}
+	if len(got.Body) != 64*1024 {
+		t.Errorf("body = %d bytes, want 64 KiB", len(got.Body))
+	}
+}
+
+func TestMailGetRefusesHugeMessages(t *testing.T) {
+	user := newMailbox(t)
+	line := strings.Repeat("a", 998) + "\n"
+	seed(t, user, plainMail("Huge", "a@example.org", "b@example.org", "Mon, 02 Nov 2026 10:00:00 +0100", strings.Repeat(line, 26*1024)))
+	session := mailSession(t, user)
+
+	result, err := session.CallTool(t.Context(), &mcp.CallToolParams{Name: "mail_get", Arguments: map[string]any{"id": firstMessageID(t, session)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !result.IsError || !strings.Contains(toolText(result), "25 MiB") {
+		t.Errorf("error = %v, text = %q", result.IsError, toolText(result))
+	}
+}
+
+func TestMailGetBadIDs(t *testing.T) {
+	user := newMailbox(t)
+	seed(t, user, plainMail("One", "a@example.org", "b@example.org", "Mon, 02 Nov 2026 10:00:00 +0100", "x"))
+	session := mailSession(t, user)
+
+	tests := map[string]string{
+		"not an ID":     "nonsense",
+		"gone folder":   base64.RawURLEncoding.EncodeToString([]byte("1:1:Nope")),
+		"gone message":  "",
+		"empty message": "",
+	}
+	valid, err := base64.RawURLEncoding.DecodeString(firstMessageID(t, session))
+	if err != nil {
+		t.Fatal(err)
+	}
+	validity, _, _ := strings.Cut(string(valid), ":")
+	tests["gone message"] = base64.RawURLEncoding.EncodeToString([]byte(validity + ":999:INBOX"))
+
+	for name, id := range tests {
+		t.Run(name, func(t *testing.T) {
+			result, err := session.CallTool(t.Context(), &mcp.CallToolParams{Name: "mail_get", Arguments: map[string]any{"id": id}})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if !result.IsError {
+				t.Errorf("call succeeded: %s", toolText(result))
+			}
+		})
+	}
+}
+
+func TestMailGetLeavesMessageUnseen(t *testing.T) {
+	user := newMailbox(t)
+	seed(t, user, richMail)
+	session := mailSession(t, user)
+
+	got := callTool[mail.Content](t, session, "mail_get", map[string]any{"id": firstMessageID(t, session)})
+
+	c, err := mail.Dial(t.Context(), dovecotConfig(user))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = c.Close() })
+	message, err := c.Message(t.Context(), got.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if flags := flags(t, user, message.UID); slices.Contains(flags, imap.FlagSeen) {
+		t.Errorf("flags = %v", flags)
+	}
+}
+
+func TestMailGetDoesNotTakeAnAttachmentForTheBody(t *testing.T) {
+	user := newMailbox(t)
+	seed(t, user, `From: a@example.org
+Subject: Log attached
+Date: Mon, 02 Nov 2026 10:00:00 +0100
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="b"
+
+--b
+Content-Type: text/plain; charset=utf-8
+Content-Disposition: attachment
+
+a log file with no name
+--b
+Content-Type: text/html; charset=utf-8
+
+<p>See the log.</p>
+--b--
+`)
+	session := mailSession(t, user)
+
+	got := callTool[mail.Content](t, session, "mail_get", map[string]any{"id": firstMessageID(t, session)})
+
+	if strings.TrimSpace(got.Body) != "<p>See the log.</p>" || got.BodyType != "text/html" {
+		t.Errorf("body = %q, type %q", got.Body, got.BodyType)
 	}
 }

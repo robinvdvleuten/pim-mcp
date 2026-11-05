@@ -7,9 +7,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"io"
 	"mime"
-	"mime/quotedprintable"
 	"net"
 	"slices"
 	"strconv"
@@ -111,26 +109,6 @@ type Summary struct {
 type SearchResult struct {
 	Messages []Summary `json:"messages"`
 	More     bool      `json:"more"`
-}
-
-// Part describes one leaf of a message's MIME structure.
-type Part struct {
-	Path      string
-	MediaType string
-	Size      uint32
-
-	section  []int
-	encoding string
-	filename string
-}
-
-// Message holds the headers and structure of a message, without its content.
-type Message struct {
-	UID     uint32
-	Subject string
-	From    string
-	Date    time.Time
-	Parts   []Part
 }
 
 // Dial connects and logs in. The certificate is always verified.
@@ -332,93 +310,10 @@ func summarize(folder string, validity uint32, message *imapclient.FetchMessageB
 	if message.Envelope != nil {
 		summary.Subject = message.Envelope.Subject
 		summary.Date = message.Envelope.Date
-		summary.From = formatFrom(message.Envelope.From)
+		summary.From = firstAddress(message.Envelope.From)
 	}
 	summary.HasCalendar = slices.ContainsFunc(messageParts(message.BodyStructure), Part.isCalendar)
 	return summary
-}
-
-func formatFrom(addresses []imap.Address) string {
-	if len(addresses) == 0 {
-		return ""
-	}
-	if addresses[0].Name == "" {
-		return addresses[0].Addr()
-	}
-	return addresses[0].Name + " <" + addresses[0].Addr() + ">"
-}
-
-// isCalendar spots invites in the forms mail clients send them, including an
-// attachment that only its name marks as one.
-func (p Part) isCalendar() bool {
-	return p.MediaType == "text/calendar" || p.MediaType == "application/ics" ||
-		strings.HasSuffix(strings.ToLower(p.filename), ".ics")
-}
-
-func messageParts(structure imap.BodyStructure) []Part {
-	var parts []Part
-	if structure == nil {
-		return parts
-	}
-	structure.Walk(func(path []int, part imap.BodyStructure) bool {
-		if single, ok := part.(*imap.BodyStructureSinglePart); ok {
-			parts = append(parts, Part{
-				Path:      joinPath(path),
-				MediaType: single.MediaType(),
-				Size:      single.Size,
-				section:   path,
-				encoding:  single.Encoding,
-				filename:  single.Filename(),
-			})
-		}
-		return true
-	})
-	return parts
-}
-
-// Message returns a message's headers and MIME structure.
-func (c *Client) Message(ctx context.Context, id string) (*Message, error) {
-	defer c.bind(ctx)()
-
-	uid, err := c.open(ctx, id)
-	if err != nil {
-		return nil, err
-	}
-	buf, err := c.fetchOne(ctx, uid, &imap.FetchOptions{
-		Envelope:      true,
-		BodyStructure: &imap.FetchItemBodyStructure{Extended: true},
-	})
-	if err != nil {
-		return nil, err
-	}
-	return &Message{
-		UID:     uint32(uid),
-		Subject: buf.Envelope.Subject,
-		Date:    buf.Envelope.Date,
-		From:    formatFrom(buf.Envelope.From),
-		Parts:   messageParts(buf.BodyStructure),
-	}, nil
-}
-
-// PartContent returns the decoded bytes of a part from Message. Reading does
-// not mark the message as seen.
-func (c *Client) PartContent(ctx context.Context, id string, part Part) ([]byte, error) {
-	defer c.bind(ctx)()
-
-	uid, err := c.open(ctx, id)
-	if err != nil {
-		return nil, err
-	}
-	section := &imap.FetchItemBodySection{Part: part.section, Peek: true}
-	buf, err := c.fetchOne(ctx, uid, &imap.FetchOptions{BodySection: []*imap.FetchItemBodySection{section}})
-	if err != nil {
-		return nil, err
-	}
-	content, err := decode(buf.FindBodySection(section), part.encoding)
-	if err != nil {
-		return nil, fmt.Errorf("decode part %s: %w", part.Path, err)
-	}
-	return content, nil
 }
 
 // encodeID ties a UID to its folder and UIDVALIDITY, which together are what
@@ -500,26 +395,4 @@ func contextError(ctx context.Context, err error) error {
 		return ctxErr
 	}
 	return err
-}
-
-func joinPath(path []int) string {
-	parts := make([]string, len(path))
-	for i, n := range path {
-		parts[i] = strconv.Itoa(n)
-	}
-	return strings.Join(parts, ".")
-}
-
-func decode(raw []byte, encoding string) ([]byte, error) {
-	reader := strings.NewReader(string(raw))
-	switch strings.ToLower(encoding) {
-	case "base64":
-		return io.ReadAll(base64.NewDecoder(base64.StdEncoding, reader))
-	case "quoted-printable":
-		return io.ReadAll(quotedprintable.NewReader(reader))
-	case "", "7bit", "8bit", "binary":
-		return raw, nil
-	default:
-		return nil, fmt.Errorf("unsupported encoding %q", encoding)
-	}
 }

@@ -1,0 +1,44 @@
+[
+  {
+    "uid": "over@example.org",
+    "occurrence_id": "20261024T003000Z",
+    "summary": "Night",
+    "start": "2026-10-24T02:30:00+02:00",
+    "end": "2026-10-24T03:00:00+02:00",
+    "all_day": false,
+    "timezone": "Europe/Amsterdam",
+    "location": "",
+    "description": "",
+    "recurring": true,
+    "status": "confirmed",
+    "organizer": ""
+  },
+  {
+    "uid": "over@example.org",
+    "occurrence_id": "20261025T003000Z",
+    "summary": "Night",
+    "start": "2026-10-25T02:30:00+02:00",
+    "end": "2026-10-25T02:00:00+01:00",
+    "all_day": false,
+    "timezone": "Europe/Amsterdam",
+    "location": "",
+    "description": "",
+    "recurring": true,
+    "status": "confirmed",
+    "organizer": ""
+  },
+  {
+    "uid": "over@example.org",
+    "occurrence_id": "20261026T013000Z",
+    "summary": "Night",
+    "start": "2026-10-26T02:30:00+01:00",
+    "end": "2026-10-26T03:00:00+01:00",
+    "all_day": false,
+    "timezone": "Europe/Amsterdam",
+    "location": "",
+    "description": "",
+    "recurring": true,
+    "status": "confirmed",
+    "organizer": ""
+  }
+]

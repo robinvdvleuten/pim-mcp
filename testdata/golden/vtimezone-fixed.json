@@ -1,0 +1,16 @@
+[
+  {
+    "uid": "fx@example.org",
+    "occurrence_id": "",
+    "summary": "Fixed",
+    "start": "2026-11-10T09:00:00+05:30",
+    "end": "2026-11-10T10:00:00+05:30",
+    "all_day": false,
+    "timezone": "",
+    "location": "",
+    "description": "",
+    "recurring": false,
+    "status": "confirmed",
+    "organizer": ""
+  }
+]

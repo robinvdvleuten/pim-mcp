@@ -1,0 +1,44 @@
+[
+  {
+    "uid": "ar@example.org",
+    "occurrence_id": "20261024",
+    "summary": "Holiday",
+    "start": "2026-10-24T00:00:00+02:00",
+    "end": "2026-10-25T00:00:00+02:00",
+    "all_day": true,
+    "timezone": "Europe/Amsterdam",
+    "location": "",
+    "description": "",
+    "recurring": true,
+    "status": "confirmed",
+    "organizer": ""
+  },
+  {
+    "uid": "ar@example.org",
+    "occurrence_id": "20261025",
+    "summary": "Holiday",
+    "start": "2026-10-25T00:00:00+02:00",
+    "end": "2026-10-26T00:00:00+01:00",
+    "all_day": true,
+    "timezone": "Europe/Amsterdam",
+    "location": "",
+    "description": "",
+    "recurring": true,
+    "status": "confirmed",
+    "organizer": ""
+  },
+  {
+    "uid": "ar@example.org",
+    "occurrence_id": "20261026",
+    "summary": "Holiday",
+    "start": "2026-10-26T00:00:00+01:00",
+    "end": "2026-10-27T00:00:00+01:00",
+    "all_day": true,
+    "timezone": "Europe/Amsterdam",
+    "location": "",
+    "description": "",
+    "recurring": true,
+    "status": "confirmed",
+    "organizer": ""
+  }
+]

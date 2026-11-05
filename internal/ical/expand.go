@@ -3,6 +3,7 @@ package ical
 import (
 	"errors"
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -17,8 +18,9 @@ const (
 	// maxRuleSteps bounds the walk from DTSTART to the range. Invites come from
 	// strangers, so a rule such as FREQ=SECONDLY must not be free to run long.
 	maxRuleSteps = 1_000_000
-
-	occurrenceIDFormat = "20060102T150405Z"
+	// maxRuleAge stays under the 292 years after which rrule-go silently stops
+	// producing occurrences.
+	maxRuleAge = 290 * 365 * 24 * time.Hour
 )
 
 // Errors for requests the limits refuse. Results are never silently cut short.
@@ -27,10 +29,16 @@ var (
 	ErrRangeTooLarge      = fmt.Errorf("range is longer than %d days", maxRange/(24*time.Hour))
 	ErrTooManyOccurrences = fmt.Errorf("range holds more than %d occurrences, use a shorter range", maxOccurrences)
 	ErrRuleTooExpensive   = errors.New("recurrence rule repeats too often to expand")
+	ErrRuleTooOld         = errors.New("recurrence rule started too long ago to expand")
 )
 
+// untilDatePattern finds an UNTIL holding a date rather than a date-time.
+var untilDatePattern = regexp.MustCompile(`(?i)UNTIL=\d{8}(;|$)`)
+
 // Expand returns the occurrences that overlap [start, end), ordered by start.
-func Expand(cal *goical.Calendar, start, end time.Time) ([]Occurrence, error) {
+// Values without a zone of their own, such as all-day events, are read in loc:
+// the zone of the user who asked.
+func Expand(cal *goical.Calendar, start, end time.Time, loc *time.Location) ([]Occurrence, error) {
 	if !end.After(start) {
 		return nil, ErrInvalidRange
 	}
@@ -38,9 +46,10 @@ func Expand(cal *goical.Calendar, start, end time.Time) ([]Occurrence, error) {
 		return nil, ErrRangeTooLarge
 	}
 
+	z := newZones(cal, loc)
 	occurrences := []Occurrence{}
 	for _, s := range groupSeries(cal.Events()) {
-		expanded, err := s.expand(start, end)
+		expanded, err := s.expand(z, start, end)
 		if err != nil {
 			return nil, fmt.Errorf("event %q: %w", s.uid, err)
 		}
@@ -89,34 +98,34 @@ func groupSeries(events []goical.Event) []*series {
 	return ordered
 }
 
-func (s *series) expand(rangeStart, rangeEnd time.Time) ([]Occurrence, error) {
+func (s *series) expand(z *zones, rangeStart, rangeEnd time.Time) ([]Occurrence, error) {
 	var occurrences []Occurrence
 
 	// An override replaces its instance wherever it moved to, so whether it is
 	// in range depends on its own times, not on the slot it came from.
 	overridden := map[int64]bool{}
 	for _, event := range s.overrides {
-		id, err := recurrenceID(event)
+		id, idIsDate, err := recurrenceID(z, event)
 		if err != nil {
 			return nil, err
 		}
 		overridden[id.Unix()] = true
 
-		template, start, duration, err := readEvent(event)
+		template, start, length, err := readEvent(z, event)
 		if err != nil {
 			return nil, err
 		}
-		if template.Status == "cancelled" || !overlaps(start, duration, rangeStart, rangeEnd) {
+		if template.Status == "cancelled" || !overlaps(start, length.end(start), rangeStart, rangeEnd) {
 			continue
 		}
 		template.Recurring = true
-		template.OccurrenceID = occurrenceID(id)
-		template.Start, template.End = start, start.Add(duration)
+		template.OccurrenceID = occurrenceID(id, idIsDate)
+		template.Start, template.End = start, length.end(start)
 		occurrences = append(occurrences, template)
 	}
 
 	for _, event := range s.masters {
-		expanded, err := expandMaster(event, overridden, rangeStart, rangeEnd)
+		expanded, err := expandMaster(z, event, overridden, rangeStart, rangeEnd)
 		if err != nil {
 			return nil, err
 		}
@@ -128,48 +137,56 @@ func (s *series) expand(rangeStart, rangeEnd time.Time) ([]Occurrence, error) {
 	return occurrences, nil
 }
 
-func expandMaster(event *goical.Event, overridden map[int64]bool, rangeStart, rangeEnd time.Time) ([]Occurrence, error) {
-	template, start, duration, err := readEvent(event)
+func expandMaster(z *zones, event *goical.Event, overridden map[int64]bool, rangeStart, rangeEnd time.Time) ([]Occurrence, error) {
+	template, start, length, err := readEvent(z, event)
 	if err != nil {
 		return nil, err
 	}
-	option, err := event.Props.RecurrenceRule()
-	if err != nil {
-		return nil, fmt.Errorf("read RRULE: %w", err)
-	}
-	extra, err := dateList(event, goical.PropRecurrenceDates)
+	rule, err := readRule(event, start, template.AllDay)
 	if err != nil {
 		return nil, err
 	}
-	excluded, err := dateList(event, goical.PropExceptionDates)
+	extra, err := dateList(z, event, goical.PropRecurrenceDates)
 	if err != nil {
 		return nil, err
 	}
-	template.Recurring = option != nil || len(extra) > 0
+	excluded, err := dateList(z, event, goical.PropExceptionDates)
+	if err != nil {
+		return nil, err
+	}
+	template.Recurring = rule != nil || len(extra) > 0
 
 	skip := map[int64]bool{}
 	for key := range overridden {
 		skip[key] = true
 	}
-	for _, at := range excluded {
-		skip[at.Unix()] = true
+	// Some clients exclude a day from a timed series with a date, which RFC 5545
+	// doesn't allow but whose meaning is clear.
+	skipDays := map[string]bool{}
+	for _, value := range excluded {
+		if value.isDate && !template.AllDay {
+			skipDays[value.at.Format(dateFormat)] = true
+		} else {
+			skip[value.at.Unix()] = true
+		}
 	}
 
 	var occurrences []Occurrence
 	// add also marks at as done, because RDATE may repeat a rule instance.
 	add := func(at time.Time) error {
-		if skip[at.Unix()] {
+		if skip[at.Unix()] || skipDays[at.In(z.floating).Format(dateFormat)] {
 			return nil
 		}
 		skip[at.Unix()] = true
-		if !overlaps(at, duration, rangeStart, rangeEnd) {
+		end := length.end(at)
+		if !overlaps(at, end, rangeStart, rangeEnd) {
 			return nil
 		}
 		occurrence := template
 		if template.Recurring {
-			occurrence.OccurrenceID = occurrenceID(at)
+			occurrence.OccurrenceID = occurrenceID(at, template.AllDay)
 		}
-		occurrence.Start, occurrence.End = at, at.Add(duration)
+		occurrence.Start, occurrence.End = at, end
 		occurrences = append(occurrences, occurrence)
 		if len(occurrences) > maxOccurrences {
 			return ErrTooManyOccurrences
@@ -177,17 +194,16 @@ func expandMaster(event *goical.Event, overridden map[int64]bool, rangeStart, ra
 		return nil
 	}
 
-	if option == nil {
+	if rule != nil && rangeEnd.Sub(start) > maxRuleAge {
+		return nil, ErrRuleTooOld
+	}
+
+	if rule == nil {
 		// Without a rule, DTSTART is the only instance RDATE doesn't list.
 		if err := add(start); err != nil {
 			return nil, err
 		}
 	} else {
-		option.Dtstart = start
-		rule, err := rrule.NewRRule(*option)
-		if err != nil {
-			return nil, fmt.Errorf("read RRULE: %w", err)
-		}
 		next := rule.Iterator()
 		for step := 0; ; step++ {
 			if step >= maxRuleSteps {
@@ -197,59 +213,119 @@ func expandMaster(event *goical.Event, overridden map[int64]bool, rangeStart, ra
 			if !ok || !at.Before(rangeEnd) {
 				break
 			}
-			if err := add(at); err != nil {
+			if err := add(firstInstant(at)); err != nil {
 				return nil, err
 			}
 		}
 	}
 
-	for _, at := range extra {
-		if err := add(at.In(start.Location())); err != nil {
+	for _, value := range extra {
+		if err := add(value.at.In(start.Location())); err != nil {
 			return nil, err
 		}
 	}
 	return occurrences, nil
 }
 
-// readEvent returns an event's shared fields, its start and its duration.
-func readEvent(event *goical.Event) (Occurrence, time.Time, time.Duration, error) {
+// readEvent returns an event's shared fields, its start and its length.
+func readEvent(z *zones, event *goical.Event) (Occurrence, time.Time, span, error) {
 	template := eventTemplate(event)
-	if event.Props.Get(goical.PropDateTimeStart) == nil {
-		return Occurrence{}, time.Time{}, 0, errors.New("no DTSTART")
+	prop := event.Props.Get(goical.PropDateTimeStart)
+	if prop == nil {
+		return Occurrence{}, time.Time{}, span{}, errors.New("no DTSTART")
 	}
-	start, err := event.DateTimeStart(nil)
+	start, isDate, err := z.dateTime(prop)
 	if err != nil {
-		return Occurrence{}, time.Time{}, 0, fmt.Errorf("read DTSTART: %w", err)
+		return Occurrence{}, time.Time{}, span{}, fmt.Errorf("read DTSTART: %w", err)
 	}
-	end, err := event.DateTimeEnd(nil)
+	length, err := readLength(z, event, start, isDate)
 	if err != nil {
-		return Occurrence{}, time.Time{}, 0, fmt.Errorf("read end: %w", err)
+		return Occurrence{}, time.Time{}, span{}, err
 	}
-	if end.Before(start) {
-		return Occurrence{}, time.Time{}, 0, errors.New("ends before it starts")
-	}
-	template.Timezone = start.Location().String()
-	return template, start, end.Sub(start), nil
+	template.AllDay = isDate
+	template.Timezone = zoneName(start.Location())
+	return template, start, length, nil
 }
 
-func recurrenceID(event *goical.Event) (time.Time, error) {
+// readLength follows RFC 5545 3.8.5.3: DTEND gives every occurrence the same
+// exact length, while the days of a DURATION follow the calendar.
+func readLength(z *zones, event *goical.Event, start time.Time, isDate bool) (span, error) {
+	if prop := event.Props.Get(goical.PropDateTimeEnd); prop != nil {
+		end, _, err := z.dateTime(prop)
+		if err != nil {
+			return span{}, fmt.Errorf("read DTEND: %w", err)
+		}
+		switch {
+		case end.Before(start):
+			return span{}, errors.New("ends before it starts")
+		case isDate && end.Equal(start):
+			// Not allowed, but it can only mean the one day.
+			return span{days: 1}, nil
+		case isDate:
+			return span{days: civilDays(start, end)}, nil
+		}
+		return span{exact: end.Sub(start)}, nil
+	}
+	if prop := event.Props.Get(goical.PropDuration); prop != nil {
+		length, err := parseDuration(prop.Value)
+		if err != nil {
+			return span{}, fmt.Errorf("read DURATION: %w", err)
+		}
+		return length, nil
+	}
+	if isDate {
+		return span{days: 1}, nil
+	}
+	return span{}, nil
+}
+
+// readRule returns the event's RRULE, or nil if it has none.
+func readRule(event *goical.Event, start time.Time, allDay bool) (*rrule.RRule, error) {
+	prop := event.Props.Get(goical.PropRecurrenceRule)
+	if prop == nil {
+		return nil, nil
+	}
+	option, err := rrule.StrToROptionInLocation(prop.Value, start.Location())
+	if err != nil {
+		return nil, fmt.Errorf("read RRULE: %w", err)
+	}
+	// An UNTIL that is a date, or that belongs to an all-day event, includes that
+	// date. Read as a moment, it could fall before the last day's midnight.
+	if !option.Until.IsZero() && (allDay || untilDatePattern.MatchString(prop.Value)) {
+		year, month, day := option.Until.Date()
+		option.Until = time.Date(year, month, day, 23, 59, 59, 0, start.Location())
+	}
+	option.Dtstart = start
+	rule, err := rrule.NewRRule(*option)
+	if err != nil {
+		return nil, fmt.Errorf("read RRULE: %w", err)
+	}
+	return rule, nil
+}
+
+func recurrenceID(z *zones, event *goical.Event) (time.Time, bool, error) {
 	prop := event.Props.Get(goical.PropRecurrenceID)
 	// Refused rather than treated as a single override, which would show the
 	// later instances unchanged.
 	if strings.EqualFold(prop.Params.Get("RANGE"), "THISANDFUTURE") {
-		return time.Time{}, errors.New("RECURRENCE-ID with RANGE=THISANDFUTURE is not supported")
+		return time.Time{}, false, errors.New("RECURRENCE-ID with RANGE=THISANDFUTURE is not supported")
 	}
-	id, err := prop.DateTime(nil)
+	id, isDate, err := z.dateTime(prop)
 	if err != nil {
-		return time.Time{}, fmt.Errorf("read RECURRENCE-ID: %w", err)
+		return time.Time{}, false, fmt.Errorf("read RECURRENCE-ID: %w", err)
 	}
-	return id, nil
+	return id, isDate, nil
+}
+
+type dateValue struct {
+	at     time.Time
+	isDate bool
 }
 
 // dateList reads every value of a property that may repeat and may hold a
 // comma-separated list, such as EXDATE and RDATE.
-func dateList(event *goical.Event, name string) ([]time.Time, error) {
-	var dates []time.Time
+func dateList(z *zones, event *goical.Event, name string) ([]dateValue, error) {
+	var dates []dateValue
 	for _, prop := range event.Props.Values(name) {
 		if prop.ValueType() == goical.ValuePeriod {
 			return nil, fmt.Errorf("%s with PERIOD values is not supported", name)
@@ -257,28 +333,33 @@ func dateList(event *goical.Event, name string) ([]time.Time, error) {
 		for value := range strings.SplitSeq(prop.Value, ",") {
 			single := prop
 			single.Value = value
-			at, err := single.DateTime(nil)
+			at, isDate, err := z.dateTime(&single)
 			if err != nil {
 				return nil, fmt.Errorf("read %s: %w", name, err)
 			}
-			dates = append(dates, at)
+			dates = append(dates, dateValue{at, isDate})
 		}
 	}
 	return dates, nil
 }
 
-func occurrenceID(at time.Time) string {
-	return at.UTC().Format(occurrenceIDFormat)
+// occurrenceID names an instance the way RECURRENCE-ID would: a date for
+// all-day events, since that is the same date in every zone.
+func occurrenceID(at time.Time, isDate bool) string {
+	if isDate {
+		return at.Format(dateFormat)
+	}
+	return at.UTC().Format(utcFormat)
 }
 
-// overlaps treats an event with no duration as a point in time, so it counts
-// when it starts inside the range even though it ends where it starts.
-func overlaps(start time.Time, duration time.Duration, rangeStart, rangeEnd time.Time) bool {
+// overlaps treats an event with no length as a point in time, so it counts when
+// it starts inside the range even though it ends where it starts.
+func overlaps(start, end, rangeStart, rangeEnd time.Time) bool {
 	if !start.Before(rangeEnd) {
 		return false
 	}
-	if duration == 0 {
+	if end.Equal(start) {
 		return !start.Before(rangeStart)
 	}
-	return start.Add(duration).After(rangeStart)
+	return end.After(rangeStart)
 }

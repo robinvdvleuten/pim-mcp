@@ -69,7 +69,7 @@ func TestExpandGolden(t *testing.T) {
 				t.Fatalf("parse: %v", err)
 			}
 
-			occurrences, err := Expand(cal, date(t, tt.start), date(t, tt.end))
+			occurrences, err := Expand(cal, date(t, tt.start), date(t, tt.end), time.UTC)
 			if err != nil {
 				t.Fatalf("expand: %v", err)
 			}
@@ -119,7 +119,7 @@ func TestExpandBoundaries(t *testing.T) {
 				t.Fatalf("parse: %v", err)
 			}
 
-			got, err := Expand(cal, windowStart, windowEnd)
+			got, err := Expand(cal, windowStart, windowEnd, time.UTC)
 			if err != nil {
 				t.Fatalf("expand: %v", err)
 			}
@@ -158,7 +158,7 @@ func TestExpandLimits(t *testing.T) {
 				t.Fatalf("parse: %v", err)
 			}
 
-			_, err = Expand(cal, date(t, tt.start), date(t, tt.end))
+			_, err = Expand(cal, date(t, tt.start), date(t, tt.end), time.UTC)
 
 			if !errors.Is(err, tt.want) {
 				t.Errorf("err = %v, want %v", err, tt.want)
@@ -191,7 +191,7 @@ func TestExpandRejectsBadEvents(t *testing.T) {
 				t.Fatalf("parse: %v", err)
 			}
 
-			_, err = Expand(cal, date(t, "2026-11-01T00:00:00Z"), date(t, "2026-12-01T00:00:00Z"))
+			_, err = Expand(cal, date(t, "2026-11-01T00:00:00Z"), date(t, "2026-12-01T00:00:00Z"), time.UTC)
 
 			if err == nil || !strings.Contains(err.Error(), tt.want) {
 				t.Errorf("err = %v, want it to mention %q", err, tt.want)
@@ -228,7 +228,7 @@ func TestExpandKeepsWholeTextValues(t *testing.T) {
 				t.Fatalf("parse: %v", err)
 			}
 
-			got, err := Expand(cal, date(t, "2026-11-10T00:00:00Z"), date(t, "2026-11-11T00:00:00Z"))
+			got, err := Expand(cal, date(t, "2026-11-10T00:00:00Z"), date(t, "2026-11-11T00:00:00Z"), time.UTC)
 			if err != nil {
 				t.Fatalf("expand: %v", err)
 			}

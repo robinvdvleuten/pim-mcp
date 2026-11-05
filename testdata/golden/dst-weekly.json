@@ -1,0 +1,44 @@
+[
+  {
+    "uid": "dst@example.org",
+    "occurrence_id": "20261018T070000Z",
+    "summary": "Weekly",
+    "start": "2026-10-18T09:00:00+02:00",
+    "end": "2026-10-18T10:00:00+02:00",
+    "all_day": false,
+    "timezone": "Europe/Amsterdam",
+    "location": "",
+    "description": "",
+    "recurring": true,
+    "status": "confirmed",
+    "organizer": ""
+  },
+  {
+    "uid": "dst@example.org",
+    "occurrence_id": "20261025T080000Z",
+    "summary": "Weekly",
+    "start": "2026-10-25T09:00:00+01:00",
+    "end": "2026-10-25T10:00:00+01:00",
+    "all_day": false,
+    "timezone": "Europe/Amsterdam",
+    "location": "",
+    "description": "",
+    "recurring": true,
+    "status": "confirmed",
+    "organizer": ""
+  },
+  {
+    "uid": "dst@example.org",
+    "occurrence_id": "20261101T080000Z",
+    "summary": "Weekly",
+    "start": "2026-11-01T09:00:00+01:00",
+    "end": "2026-11-01T10:00:00+01:00",
+    "all_day": false,
+    "timezone": "Europe/Amsterdam",
+    "location": "",
+    "description": "",
+    "recurring": true,
+    "status": "confirmed",
+    "organizer": ""
+  }
+]

@@ -1,0 +1,16 @@
+[
+  {
+    "uid": "fl@example.org",
+    "occurrence_id": "",
+    "summary": "Floating",
+    "start": "2026-11-10T09:00:00+01:00",
+    "end": "2026-11-10T10:00:00+01:00",
+    "all_day": false,
+    "timezone": "Europe/Amsterdam",
+    "location": "",
+    "description": "",
+    "recurring": false,
+    "status": "confirmed",
+    "organizer": ""
+  }
+]

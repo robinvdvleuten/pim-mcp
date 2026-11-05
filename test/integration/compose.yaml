@@ -15,3 +15,23 @@ services:
       interval: 2s
       timeout: 2s
       retries: 15
+
+  radicale:
+    image: tomsquest/docker-radicale:3.9.0.0
+    volumes:
+      - ./radicale.conf:/config/config:ro
+      - ./radicale.users:/config/users:ro
+    ports:
+      - "127.0.0.1:35232:5232"
+
+  baikal:
+    image: ckulka/baikal:0.10.1-apache
+    volumes:
+      - ./baikal-seed.sh:/docker-entrypoint.d/20-seed.sh:ro
+    ports:
+      - "127.0.0.1:35233:80"
+    healthcheck:
+      test: ["CMD", "php", "-r", "exit(@fsockopen('127.0.0.1', 80) ? 0 : 1);"]
+      interval: 2s
+      timeout: 2s
+      retries: 15

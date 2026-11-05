@@ -1,0 +1,14 @@
+BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:some-script
+BEGIN:VEVENT
+UID:sloppy@example.org
+DTSTAMP:20261201T101500Z
+DTSTART:20270801T090000Z
+DURATION:PT45M
+SUMMARY:Überlegung für das Kundenprojekt in München mit vielen Beteiligt
+ en, wöchentlich neu
+ORGANIZER:MAILTO:sam@example.org
+STATUS:confirmed
+END:VEVENT
+END:VCALENDAR

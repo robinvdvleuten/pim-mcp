@@ -1,0 +1,35 @@
+BEGIN:VCALENDAR
+PRODID:-//Google Inc//Google Calendar 70.9054//EN
+VERSION:2.0
+CALSCALE:GREGORIAN
+METHOD:REQUEST
+BEGIN:VEVENT
+DTSTART:20270210T130000Z
+DTEND:20270210T140000Z
+DTSTAMP:20261201T101500Z
+ORGANIZER;CN=sam@example.org:mailto:sam@example.org
+UID:3k5v8s0q1r2t3u4v5w6x7y8z9a@google.com
+ATTENDEE;CUTYPE=INDIVIDUAL;ROLE=REQ-PARTICIPANT;PARTSTAT=ACCEPTED;RSVP=TRUE
+ ;CN=sam@example.org;X-NUM-GUESTS=0:mailto:sam@example.org
+ATTENDEE;CUTYPE=INDIVIDUAL;ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=
+ TRUE;CN=me@example.org;X-NUM-GUESTS=0:mailto:me@example.org
+X-GOOGLE-CONFERENCE:https://meet.google.com/abc-defg-hij
+CREATED:20261201T101400Z
+DESCRIPTION:-::~:~::~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~
+ :~:~:~:~:~:~:~::~:~::-\nJoin with Google Meet: https://meet.google.com/abc
+ -defg-hij\nLearn more about Meet at: https://support.google.com/a/users/an
+ swer/9282720\n-::~:~::~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:
+ ~:~:~:~:~:~:~:~:~::~:~::-
+LAST-MODIFIED:20261201T101500Z
+LOCATION:
+SEQUENCE:0
+STATUS:CONFIRMED
+SUMMARY:Catch up, quickly
+TRANSP:OPAQUE
+BEGIN:VALARM
+ACTION:DISPLAY
+DESCRIPTION:This is an event reminder
+TRIGGER:-P0DT0H10M0S
+END:VALARM
+END:VEVENT
+END:VCALENDAR

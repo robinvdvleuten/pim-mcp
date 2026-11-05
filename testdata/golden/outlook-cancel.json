@@ -1,0 +1,16 @@
+[
+  {
+    "uid": "outlook-cancel@example.org",
+    "occurrence_id": "",
+    "summary": "Canceled: Budget review",
+    "start": "2027-01-15T14:00:00+01:00",
+    "end": "2027-01-15T15:00:00+01:00",
+    "all_day": false,
+    "timezone": "Europe/Berlin",
+    "location": "",
+    "description": "",
+    "recurring": false,
+    "status": "cancelled",
+    "organizer": "jan@example.org"
+  }
+]

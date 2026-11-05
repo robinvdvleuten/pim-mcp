@@ -1,0 +1,16 @@
+[
+  {
+    "uid": "sloppy@example.org",
+    "occurrence_id": "",
+    "summary": "Überlegung für das Kundenprojekt in München mit vielen Beteiligten, wöchentlich neu",
+    "start": "2027-08-01T09:00:00Z",
+    "end": "2027-08-01T09:45:00Z",
+    "all_day": false,
+    "timezone": "UTC",
+    "location": "",
+    "description": "",
+    "recurring": false,
+    "status": "confirmed",
+    "organizer": "sam@example.org"
+  }
+]

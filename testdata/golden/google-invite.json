@@ -1,0 +1,16 @@
+[
+  {
+    "uid": "3k5v8s0q1r2t3u4v5w6x7y8z9a@google.com",
+    "occurrence_id": "",
+    "summary": "Catch up, quickly",
+    "start": "2027-02-10T13:00:00Z",
+    "end": "2027-02-10T14:00:00Z",
+    "all_day": false,
+    "timezone": "UTC",
+    "location": "",
+    "description": "-::~:~::~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~::~:~::-\nJoin with Google Meet: https://meet.google.com/abc-defg-hij\nLearn more about Meet at: https://support.google.com/a/users/answer/9282720\n-::~:~::~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~::~:~::-",
+    "recurring": false,
+    "status": "confirmed",
+    "organizer": "sam@example.org"
+  }
+]

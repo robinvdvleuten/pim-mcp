@@ -1,0 +1,45 @@
+BEGIN:VCALENDAR
+METHOD:REQUEST
+PRODID:Microsoft Exchange Server 2010
+VERSION:2.0
+BEGIN:VTIMEZONE
+TZID:Romance Standard Time
+BEGIN:STANDARD
+DTSTART:16010101T030000
+TZOFFSETFROM:+0200
+TZOFFSETTO:+0100
+RRULE:FREQ=YEARLY;INTERVAL=1;BYDAY=-1SU;BYMONTH=10
+END:STANDARD
+BEGIN:DAYLIGHT
+DTSTART:16010101T020000
+TZOFFSETFROM:+0100
+TZOFFSETTO:+0200
+RRULE:FREQ=YEARLY;INTERVAL=1;BYDAY=-1SU;BYMONTH=3
+END:DAYLIGHT
+END:VTIMEZONE
+BEGIN:VEVENT
+ORGANIZER;CN=Marie Dubois:mailto:marie@example.org
+DESCRIPTION;LANGUAGE=en-US:________________________________________________
+ ________________________________\nMicrosoft Teams Need help? <https://aka.
+ ms/JoinTeamsMeeting>\nJoin on your computer\, mobile app or room device\nC
+ lick here to join the meeting <https://teams.microsoft.com/l/meetup-join/1
+ 9%3ameeting_abc%40thread.v2/0?context=%7b%22Tid%22%3a%22x%22%7d>\nMeeting 
+ ID: 123 456 789\nPasscode: abc\n
+UID:teams-meeting@example.org
+SUMMARY;LANGUAGE=en-US:Project sync
+DTSTART;TZID=Romance Standard Time:20270707T090000
+DTEND;TZID=Romance Standard Time:20270707T093000
+CLASS:PUBLIC
+DTSTAMP:20261201T101500Z
+TRANSP:OPAQUE
+STATUS:CONFIRMED
+SEQUENCE:0
+LOCATION;LANGUAGE=en-US:Microsoft Teams Meeting
+X-MICROSOFT-SKYPETEAMSMEETINGURL:https://teams.microsoft.com/l/meetup-join/
+ 19%3ameeting_abc%40thread.v2/0
+X-MICROSOFT-SCHEDULINGSERVICEUPDATEURL:https://api.scheduler.teams.microsof
+ t.com/teams/x/y/19_meeting_abc@thread.v2/0
+X-MICROSOFT-LOCATIONDISPLAYNAME:Microsoft Teams Meeting
+X-MS-OLK-CONFTYPE:0
+END:VEVENT
+END:VCALENDAR

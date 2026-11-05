@@ -295,6 +295,9 @@ func checkRuleAllows(rule string, delta time.Duration, oldStart, newStart time.T
 	return nil
 }
 
+// ErrNoSuchOccurrence means an event doesn't have, or no longer has, an occurrence.
+var ErrNoSuchOccurrence = errors.New("this event has no such occurrence")
+
 var untilValuePattern = regexp.MustCompile(`(?i)(UNTIL=)(\d{8})(T\d{6}Z?)?`)
 
 func shiftUntil(rule string, delta time.Duration) string {
@@ -458,7 +461,7 @@ func loadSeries(data []byte, id string, loc *time.Location) (*goical.Calendar, *
 		return fail(err)
 	}
 	if override == nil && !inSeries {
-		return fail(fmt.Errorf("this event has no occurrence %s", id))
+		return fail(fmt.Errorf("%w: %s", ErrNoSuchOccurrence, id))
 	}
 	return cal, z, s, slot, override, inSeries, nil
 }

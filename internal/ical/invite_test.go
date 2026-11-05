@@ -301,3 +301,36 @@ func sortedByID(occurrences []Occurrence) []Occurrence {
 	}
 	return append(plain, others...)
 }
+
+func TestCancelledOccurrences(t *testing.T) {
+	tests := []struct {
+		name      string
+		data      []byte
+		wantWhole bool
+		wantIDs   []string
+	}{
+		{"the whole event", inviteOf("CANCEL", veventLines("one", "DTSTART:20261110T090000Z")), true, nil},
+		{"one occurrence", inviteOf("CANCEL", veventLines("one", "RECURRENCE-ID:20261110T090000Z", "DTSTART:20261110T090000Z")), false, []string{"20261110T090000Z"}},
+		{"in the event's zone", inviteOf("CANCEL", veventLines("one", "RECURRENCE-ID;TZID=Europe/Amsterdam:20261110T100000", "DTSTART;TZID=Europe/Amsterdam:20261110T100000")), false, []string{"20261110T090000Z"}},
+		{"an all-day occurrence", inviteOf("CANCEL", veventLines("one", "RECURRENCE-ID;VALUE=DATE:20261110", "DTSTART;VALUE=DATE:20261110")), false, []string{"20261110"}},
+		{"two occurrences", inviteOf("CANCEL", veventLines("one", "RECURRENCE-ID:20261110T090000Z", "DTSTART:20261110T090000Z"), veventLines("one", "RECURRENCE-ID:20261111T090000Z", "DTSTART:20261111T090000Z")), false, []string{"20261110T090000Z", "20261111T090000Z"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			invite, err := ParseInvite(tt.data, time.UTC)
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+
+			whole, ids, err := invite.CancelledOccurrences("one")
+			if err != nil {
+				t.Fatalf("cancelled: %v", err)
+			}
+
+			if whole != tt.wantWhole || strings.Join(ids, " ") != strings.Join(tt.wantIDs, " ") {
+				t.Errorf("whole = %v, ids = %v", whole, ids)
+			}
+		})
+	}
+}

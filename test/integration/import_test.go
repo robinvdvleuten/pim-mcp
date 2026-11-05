@@ -4,6 +4,7 @@ package integration
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os/exec"
@@ -421,4 +422,93 @@ func TestImportSendsNoSchedulingReply(t *testing.T) {
 	if after := baikalSchedulingMessages(t); after != before {
 		t.Errorf("scheduling messages went from %d to %d", before, after)
 	}
+}
+
+func TestImportCancellationDeletesTheEvent(t *testing.T) {
+	eachImportServer(t, func(t *testing.T, s caldavServer, c *calendar.Client, user string, session *mcp.ClientSession) {
+		uid := newUID(t)
+		seed(t, user, inviteMail("REQUEST", vevent(uid, "SEQUENCE:1", "DTSTART:20330110T090000Z", "DTEND:20330110T100000Z", "RRULE:FREQ=DAILY;COUNT=3", "SUMMARY:Called off")))
+		imported := confirmImport(t, session, s.calendar)
+		seed(t, user, inviteMail("CANCEL", vevent(uid, "SEQUENCE:2", "DTSTART:20330110T090000Z", "STATUS:CANCELLED", "SUMMARY:Called off")))
+
+		got := confirmImport(t, session, s.calendar)
+
+		if !got.Written || got.Events[0].Action != importer.ActionCancel {
+			t.Errorf("result = %+v", got)
+		}
+		if found := eventsNamed(t, c, s, uid, time.Date(2033, 1, 10, 0, 0, 0, 0, time.UTC)); len(found) != 0 {
+			t.Errorf("found = %+v", found)
+		}
+		if _, err := c.Get(t.Context(), imported.Events[0].EventID); !errors.Is(err, calendar.ErrEventNotFound) {
+			t.Errorf("get: %v, want it gone", err)
+		}
+	})
+}
+
+func TestImportCancellationOfOneOccurrenceKeepsTheRest(t *testing.T) {
+	eachImportServer(t, func(t *testing.T, s caldavServer, c *calendar.Client, user string, session *mcp.ClientSession) {
+		uid := newUID(t)
+		seed(t, user, inviteMail("REQUEST", vevent(uid, "SEQUENCE:1", "DTSTART:20330210T090000Z", "DTEND:20330210T100000Z", "RRULE:FREQ=DAILY;COUNT=3", "SUMMARY:Series")))
+		confirmImport(t, session, s.calendar)
+		seed(t, user, inviteMail("CANCEL", vevent(uid, "SEQUENCE:2", "RECURRENCE-ID:20330211T090000Z", "DTSTART:20330211T090000Z", "STATUS:CANCELLED", "SUMMARY:Series")))
+
+		got := confirmImport(t, session, s.calendar)
+
+		if !got.Written || got.Events[0].Action != importer.ActionCancel || got.Events[0].ETag == "" {
+			t.Errorf("result = %+v", got)
+		}
+		found := eventsNamed(t, c, s, uid, time.Date(2033, 2, 10, 0, 0, 0, 0, time.UTC))
+		if len(found) != 2 || found[0].OccurrenceID != "20330210T090000Z" || found[1].OccurrenceID != "20330212T090000Z" {
+			t.Errorf("found = %+v", found)
+		}
+	})
+}
+
+func TestImportCancellationNeedsNoStoredEvent(t *testing.T) {
+	eachImportServer(t, func(t *testing.T, s caldavServer, _ *calendar.Client, user string, session *mcp.ClientSession) {
+		seed(t, user, inviteMail("CANCEL", vevent(newUID(t), "SEQUENCE:2", "DTSTART:20330310T090000Z", "SUMMARY:Unknown")))
+
+		got := confirmImport(t, session, s.calendar)
+
+		if got.Written || got.Events[0].Action != importer.ActionSkip {
+			t.Errorf("result = %+v", got)
+		}
+	})
+}
+
+func TestImportCancellationOfAnOccurrenceAlreadyGone(t *testing.T) {
+	eachImportServer(t, func(t *testing.T, s caldavServer, c *calendar.Client, user string, session *mcp.ClientSession) {
+		uid := newUID(t)
+		seed(t, user, inviteMail("REQUEST", vevent(uid, "SEQUENCE:1", "DTSTART:20330410T090000Z", "DTEND:20330410T100000Z", "RRULE:FREQ=DAILY;COUNT=2", "SUMMARY:Series")))
+		confirmImport(t, session, s.calendar)
+		seed(t, user, inviteMail("CANCEL", vevent(uid, "SEQUENCE:2", "RECURRENCE-ID:20330411T090000Z", "DTSTART:20330411T090000Z", "SUMMARY:Series")))
+		confirmImport(t, session, s.calendar)
+
+		got := confirmImport(t, session, s.calendar)
+
+		if got.Written {
+			t.Errorf("result = %+v", got)
+		}
+		if found := eventsNamed(t, c, s, uid, time.Date(2033, 4, 10, 0, 0, 0, 0, time.UTC)); len(found) != 1 {
+			t.Errorf("found = %+v", found)
+		}
+	})
+}
+
+func TestImportCancellationPreviewWritesNothing(t *testing.T) {
+	eachImportServer(t, func(t *testing.T, s caldavServer, c *calendar.Client, user string, session *mcp.ClientSession) {
+		uid := newUID(t)
+		seed(t, user, inviteMail("REQUEST", vevent(uid, "SEQUENCE:1", "DTSTART:20330510T090000Z", "DTEND:20330510T100000Z", "SUMMARY:Still here")))
+		confirmImport(t, session, s.calendar)
+		seed(t, user, inviteMail("CANCEL", vevent(uid, "SEQUENCE:2", "DTSTART:20330510T090000Z", "SUMMARY:Still here")))
+
+		got := preview(t, session, s.calendar)
+
+		if got.Written || got.Events[0].Action != importer.ActionCancel {
+			t.Errorf("result = %+v", got)
+		}
+		if found := eventsNamed(t, c, s, uid, time.Date(2033, 5, 10, 0, 0, 0, 0, time.UTC)); len(found) != 1 {
+			t.Errorf("found = %+v", found)
+		}
+	})
 }

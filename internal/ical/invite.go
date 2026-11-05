@@ -234,3 +234,25 @@ func (i *Invite) MergeInto(stored []byte, uid string) ([]byte, error) {
 	}
 	return encode(cal)
 }
+
+// CancelledOccurrences says what a CANCEL covers: the whole event, or the
+// occurrences it names, as an occurrence_id of each.
+func (i *Invite) CancelledOccurrences(uid string) (bool, []string, error) {
+	s := i.series(uid)
+	if s == nil {
+		return false, nil, fmt.Errorf("this invite has no event %q", uid)
+	}
+	if len(s.masters) > 0 {
+		return true, nil, nil
+	}
+	z := newZones(i.cal, time.UTC)
+	ids := make([]string, 0, len(s.overrides))
+	for _, override := range s.overrides {
+		id, isDate, err := recurrenceID(z, override)
+		if err != nil {
+			return false, nil, err
+		}
+		ids = append(ids, occurrenceID(id, isDate))
+	}
+	return false, ids, nil
+}

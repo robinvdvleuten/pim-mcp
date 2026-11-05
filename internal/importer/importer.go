@@ -97,7 +97,7 @@ func Import(ctx context.Context, messages *mail.Client, calendars *calendar.Clie
 		if err != nil {
 			return nil, err
 		}
-		written, err := apply(ctx, calendars, invite, event, calendarID)
+		written, err := apply(ctx, calendars, invite, event, calendarID, loc)
 		if err != nil {
 			return nil, fmt.Errorf("event %q: %w", incoming.UID, err)
 		}
@@ -107,7 +107,7 @@ func Import(ctx context.Context, messages *mail.Client, calendars *calendar.Clie
 	return result, nil
 }
 
-func apply(ctx context.Context, calendars *calendar.Client, invite *ical.Invite, event *Event, calendarID string) (bool, error) {
+func apply(ctx context.Context, calendars *calendar.Client, invite *ical.Invite, event *Event, calendarID string, loc *time.Location) (bool, error) {
 	switch event.Action {
 	case ActionCreate:
 		data, err := invite.Storable(event.UID)
@@ -133,10 +133,53 @@ func apply(ctx context.Context, calendars *calendar.Client, invite *ical.Invite,
 		event.ETag, err = calendars.Update(ctx, existing.Path, existing.ETag, data)
 		return err == nil, err
 	case ActionCancel:
-		return false, errors.New("cancelling isn't available yet")
+		return cancel(ctx, calendars, invite, event, calendarID, loc)
 	default:
 		return false, nil
 	}
+}
+
+// cancel removes what the organizer called off: the event, or the occurrences
+// named. An occurrence already gone is fine, as the outcome is the one wanted.
+func cancel(ctx context.Context, calendars *calendar.Client, invite *ical.Invite, event *Event, calendarID string, loc *time.Location) (bool, error) {
+	existing, err := calendars.FindByUID(ctx, calendarID, event.UID)
+	if err != nil {
+		return false, err
+	}
+	if existing == nil {
+		return false, nil
+	}
+	event.EventID = existing.Path
+	whole, ids, err := invite.CancelledOccurrences(event.UID)
+	if err != nil {
+		return false, err
+	}
+	if whole {
+		return true, calendars.Delete(ctx, existing.Path, existing.ETag)
+	}
+
+	data := existing.Data
+	changed := false
+	for _, id := range ids {
+		remaining, err := ical.DeleteOccurrence(data, id, loc, time.Now())
+		if errors.Is(err, ical.ErrNoSuchOccurrence) {
+			continue
+		}
+		if err != nil {
+			return false, err
+		}
+		changed = true
+		if remaining == nil {
+			return true, calendars.Delete(ctx, existing.Path, existing.ETag)
+		}
+		data = remaining
+	}
+	if !changed {
+		event.Action, event.Reason = ActionSkip, "these occurrences are already gone"
+		return false, nil
+	}
+	event.ETag, err = calendars.Update(ctx, existing.Path, existing.ETag, data)
+	return err == nil, err
 }
 
 // objectPath hashes the UID, because it comes from a stranger and could hold

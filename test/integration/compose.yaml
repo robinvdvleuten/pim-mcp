@@ -1,0 +1,17 @@
+name: pim-mcp-test
+
+services:
+  dovecot:
+    image: dovecot/dovecot:2.4.5
+    environment:
+      USER_PASSWORD: test-password
+    volumes:
+      - ./dovecot.conf:/etc/dovecot/conf.d/pim-mcp-test.conf:ro
+    ports:
+      - "127.0.0.1:31143:31143"
+      - "127.0.0.1:31993:31993"
+    healthcheck:
+      test: ["CMD", "nc", "-z", "127.0.0.1", "31143"]
+      interval: 2s
+      timeout: 2s
+      retries: 15

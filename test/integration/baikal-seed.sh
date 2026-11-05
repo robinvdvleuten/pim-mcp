@@ -36,4 +36,14 @@ $db->exec("INSERT INTO calendars (synctoken, components) VALUES (1, 'VEVENT')");
 $id = $db->lastInsertId();
 $db->exec("INSERT INTO calendarinstances (calendarid, principaluri, access, displayname, uri, transparent)
            VALUES ($id, 'principals/tester', 1, 'Default', 'default', 0)");
+// Another user's calendar, shared with the tester to read only. Access 1 owns,
+// 2 reads.
+$db->exec("INSERT INTO users (username, digesta1) VALUES ('owner', '$digest')");
+$db->exec("INSERT INTO principals (uri, email, displayname) VALUES ('principals/owner', 'owner@example.org', 'Owner')");
+$db->exec("INSERT INTO calendars (synctoken, components) VALUES (1, 'VEVENT')");
+$shared = $db->lastInsertId();
+$db->exec("INSERT INTO calendarinstances (calendarid, principaluri, access, displayname, uri, transparent)
+           VALUES ($shared, 'principals/owner', 1, 'Theirs', 'theirs', 0)");
+$db->exec("INSERT INTO calendarinstances (calendarid, principaluri, access, displayname, uri, transparent, share_invitestatus)
+           VALUES ($shared, 'principals/tester', 2, 'Shared', 'shared', 0, 2)");
 PHP

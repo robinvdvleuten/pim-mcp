@@ -9,13 +9,16 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/emersion/go-webdav"
 	"github.com/emersion/go-webdav/caldav"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/robinvdvleuten/pim-mcp/internal/calendar"
+	"github.com/robinvdvleuten/pim-mcp/internal/mcpserver"
 )
 
 const (
@@ -213,4 +216,133 @@ func assertSummary(ctx context.Context, t *testing.T, c *calendar.Client, path, 
 		t.Errorf("server copy = %q, want it to contain %q", object.Data, want)
 	}
 	return object
+}
+
+func calendarSession(t *testing.T, s caldavServer) *mcp.ClientSession {
+	t.Helper()
+	server := mcpserver.New(mcpserver.Options{
+		Version: "test",
+		DialCalendar: func() (*calendar.Client, error) {
+			return calendar.New(calendar.Config{URL: s.url, Username: caldavUser, Password: caldavPassword})
+		},
+	})
+	serverTransport, clientTransport := mcp.NewInMemoryTransports()
+	serverSession, err := server.Connect(t.Context(), serverTransport, nil)
+	if err != nil {
+		t.Fatalf("connect server: %v", err)
+	}
+	t.Cleanup(func() { _ = serverSession.Close() })
+	client := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "test"}, nil)
+	session, err := client.Connect(t.Context(), clientTransport, nil)
+	if err != nil {
+		t.Fatalf("connect client: %v", err)
+	}
+	t.Cleanup(func() { _ = session.Close() })
+	return session
+}
+
+func TestCalendarListCalendars(t *testing.T) {
+	for _, s := range caldavServers {
+		t.Run(s.name, func(t *testing.T) {
+			if s.setup != nil {
+				s.setup(t, s)
+			}
+			session := calendarSession(t, s)
+
+			got := callTool[mcpserver.CalendarList](t, session, "calendar_list_calendars", nil)
+
+			i := slices.IndexFunc(got.Calendars, func(c calendar.Calendar) bool { return c.ID == s.calendar })
+			if i < 0 {
+				t.Fatalf("calendars = %+v, want %s", got.Calendars, s.calendar)
+			}
+			if got.Calendars[i].ReadOnly {
+				t.Errorf("calendar = %+v, want it writable", got.Calendars[i])
+			}
+			if got.Calendars[i].Name == "" {
+				t.Errorf("calendar = %+v, want a name", got.Calendars[i])
+			}
+		})
+	}
+}
+
+func TestCalendarIDsWorkForWrites(t *testing.T) {
+	eachCalDAVServer(t, func(t *testing.T, s caldavServer, c *calendar.Client) {
+		calendars, err := c.Calendars(t.Context())
+		if err != nil {
+			t.Fatalf("calendars: %v", err)
+		}
+		i := slices.IndexFunc(calendars, func(found calendar.Calendar) bool { return found.ID == s.calendar })
+		if i < 0 {
+			t.Fatalf("calendars = %+v", calendars)
+		}
+		path, uid := newEventPath(t, caldavServer{calendar: calendars[i].ID})
+
+		if _, err := c.Create(t.Context(), path, eventICS(uid, "via found calendar")); err != nil {
+			t.Errorf("create: %v", err)
+		}
+	})
+}
+
+func TestBaikalSharedCalendarIsReadOnly(t *testing.T) {
+	s := caldavServers[1]
+	session := calendarSession(t, s)
+
+	got := callTool[mcpserver.CalendarList](t, session, "calendar_list_calendars", nil)
+
+	i := slices.IndexFunc(got.Calendars, func(c calendar.Calendar) bool { return c.Name == "Shared" })
+	if i < 0 {
+		t.Fatalf("calendars = %+v, want the shared one", got.Calendars)
+	}
+	if !got.Calendars[i].ReadOnly {
+		t.Errorf("calendar = %+v, want it read-only", got.Calendars[i])
+	}
+}
+
+func TestCalendarListRefusesWrongPassword(t *testing.T) {
+	for _, s := range caldavServers {
+		t.Run(s.name, func(t *testing.T) {
+			c, err := calendar.New(calendar.Config{URL: s.url, Username: caldavUser, Password: "wrong"})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if _, err := c.Calendars(t.Context()); !errors.Is(err, calendar.ErrLoginRefused) {
+				t.Errorf("err = %v, want ErrLoginRefused", err)
+			}
+		})
+	}
+}
+
+// Discovery can store a URL at any depth, so calendars have to be found from
+// each of the shapes it finds for these servers.
+func TestCalendarsFoundFromDiscoveredURLs(t *testing.T) {
+	tests := []struct {
+		name string
+		url  string
+		want string
+	}{
+		{"radicale root", "http://127.0.0.1:35232/", "/tester/default/"},
+		{"radicale user path", "http://127.0.0.1:35232/tester/", "/tester/default/"},
+		{"baikal without trailing slash", "http://127.0.0.1:35233/dav.php", "/dav.php/calendars/tester/default/"},
+		{"baikal with trailing slash", "http://127.0.0.1:35233/dav.php/", "/dav.php/calendars/tester/default/"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			createRadicaleCalendar(t, caldavServers[0])
+			c, err := calendar.New(calendar.Config{URL: tt.url, Username: caldavUser, Password: caldavPassword})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			got, err := c.Calendars(t.Context())
+			if err != nil {
+				t.Fatalf("calendars: %v", err)
+			}
+
+			if !slices.ContainsFunc(got, func(found calendar.Calendar) bool { return found.ID == tt.want }) {
+				t.Errorf("calendars = %+v, want %s", got, tt.want)
+			}
+		})
+	}
 }

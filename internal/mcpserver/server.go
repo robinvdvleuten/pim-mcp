@@ -7,6 +7,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/robinvdvleuten/pim-mcp/internal/account"
+	"github.com/robinvdvleuten/pim-mcp/internal/calendar"
 	"github.com/robinvdvleuten/pim-mcp/internal/mail"
 )
 
@@ -23,6 +24,8 @@ type Options struct {
 	ReadOnly bool
 	// DialMail opens a logged-in mail connection, for one tool call.
 	DialMail func(context.Context) (*mail.Client, error)
+	// DialCalendar returns a calendar client, for one tool call.
+	DialCalendar func() (*calendar.Client, error)
 }
 
 // Server holds what the tools share.
@@ -40,5 +43,6 @@ func New(options Options) *mcp.Server {
 		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true},
 	}, s.accountInfo)
 	s.registerMail(server)
+	s.registerCalendar(server)
 	return server
 }

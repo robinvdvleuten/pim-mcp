@@ -250,11 +250,15 @@ func mailSecurity(security string) mail.Security {
 }
 
 func checkCalDAV(ctx context.Context, a *account.Account, password string) error {
-	client, err := calendar.New(calendar.Config{URL: a.CalDAV.URL, Username: a.Username, Password: password})
+	client, err := calendar.New(calendarConfig(a, password))
 	if err != nil {
 		return err
 	}
 	return client.CheckLogin(ctx)
+}
+
+func calendarConfig(a *account.Account, password string) calendar.Config {
+	return calendar.Config{URL: a.CalDAV.URL, Username: a.Username, Password: password}
 }
 
 func (c *cli) accountRemove() int {

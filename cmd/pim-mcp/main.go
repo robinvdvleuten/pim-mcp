@@ -20,6 +20,7 @@ import (
 	"golang.org/x/term"
 
 	"github.com/robinvdvleuten/pim-mcp/internal/account"
+	"github.com/robinvdvleuten/pim-mcp/internal/calendar"
 	"github.com/robinvdvleuten/pim-mcp/internal/mail"
 	"github.com/robinvdvleuten/pim-mcp/internal/mcpserver"
 )
@@ -148,10 +149,11 @@ func (c *cli) runServe(ctx context.Context, args []string, version string) int {
 	}
 
 	options := mcpserver.Options{
-		Version:  version,
-		ReadOnly: readOnly,
-		Account:  c.loadAccount,
-		DialMail: c.dialMail,
+		Version:      version,
+		ReadOnly:     readOnly,
+		Account:      c.loadAccount,
+		DialMail:     c.dialMail,
+		DialCalendar: c.dialCalendar,
 	}
 	if err := serve(ctx, options, c.stderr); err != nil {
 		return c.fail(err)
@@ -167,15 +169,31 @@ func (c *cli) loadAccount() (*account.Account, error) {
 }
 
 func (c *cli) dialMail(ctx context.Context) (*mail.Client, error) {
-	a, err := c.loadAccount()
-	if err != nil {
-		return nil, err
-	}
-	password, _, err := account.Password(a.Email)
+	a, password, err := c.credentials()
 	if err != nil {
 		return nil, err
 	}
 	return mail.Dial(ctx, mailConfig(a, password))
+}
+
+func (c *cli) dialCalendar() (*calendar.Client, error) {
+	a, password, err := c.credentials()
+	if err != nil {
+		return nil, err
+	}
+	return calendar.New(calendarConfig(a, password))
+}
+
+func (c *cli) credentials() (*account.Account, string, error) {
+	a, err := c.loadAccount()
+	if err != nil {
+		return nil, "", err
+	}
+	password, _, err := account.Password(a.Email)
+	if err != nil {
+		return nil, "", err
+	}
+	return a, password, nil
 }
 
 // readOnlyFromEnv refuses a value it can't read, rather than guess which way

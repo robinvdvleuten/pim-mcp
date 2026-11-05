@@ -23,11 +23,38 @@ var addArgs = []string{
 	"--caldav", "https://dav.example.org/",
 }
 
+// fakeDiscoverer finds what it is given, and nothing if it is given nothing.
+type fakeDiscoverer struct {
+	imap     *account.FoundIMAP
+	caldav   *account.FoundCalDAV
+	useISPDB bool
+	calls    int
+}
+
+func (f *fakeDiscoverer) DiscoverIMAP(_ context.Context, _ string, useISPDB bool) (*account.FoundIMAP, error) {
+	f.calls++
+	f.useISPDB = useISPDB
+	if f.imap == nil {
+		return nil, account.ErrNotDiscovered
+	}
+	return f.imap, nil
+}
+
+func (f *fakeDiscoverer) DiscoverCalDAV(context.Context, string) (*account.FoundCalDAV, error) {
+	f.calls++
+	if f.caldav == nil {
+		return nil, account.ErrNotDiscovered
+	}
+	return f.caldav, nil
+}
+
 type harness struct {
 	stdout, stderr bytes.Buffer
 	cli            *cli
 	dir            string
 	prompts        int
+	confirms       int
+	answer         bool
 }
 
 func newHarness(t *testing.T) *harness {
@@ -36,9 +63,14 @@ func newHarness(t *testing.T) *harness {
 	t.Setenv(account.PasswordEnv, "")
 	h := &harness{dir: t.TempDir()}
 	h.cli = &cli{
-		stdout: &h.stdout,
-		stderr: &h.stderr,
-		store:  account.NewStore(h.dir),
+		stdout:     &h.stdout,
+		stderr:     &h.stderr,
+		store:      account.NewStore(h.dir),
+		discoverer: &fakeDiscoverer{},
+		confirm: func() (bool, error) {
+			h.confirms++
+			return h.answer, nil
+		},
 		readPassword: func() (string, error) {
 			h.prompts++
 			return testPassword, nil
@@ -359,5 +391,178 @@ func TestAccountBadUsage(t *testing.T) {
 		if code := h.run(args...); code != 2 {
 			t.Errorf("%v: exit code = %d, want 2", args, code)
 		}
+	}
+}
+
+func discovered() *fakeDiscoverer {
+	return &fakeDiscoverer{
+		imap: &account.FoundIMAP{
+			IMAP:     account.IMAP{Addr: "imap.found.example.org:143", Security: account.SecurityStartTLS},
+			Username: "found-user",
+			Source:   account.SourceAutoconfig,
+		},
+		caldav: &account.FoundCalDAV{
+			CalDAV: account.CalDAV{URL: "https://dav.found.example.org/"},
+			Source: account.SourceWellKnown,
+		},
+	}
+}
+
+func TestAccountAddDiscoversAndConfirmsBeforeAskingForThePassword(t *testing.T) {
+	h := newHarness(t)
+	h.cli.discoverer = discovered()
+	var order []string
+	h.answer = true
+	confirm := h.cli.confirm
+	h.cli.confirm = func() (bool, error) {
+		order = append(order, "confirm")
+		return confirm()
+	}
+	readPassword := h.cli.readPassword
+	h.cli.readPassword = func() (string, error) {
+		order = append(order, "password")
+		return readPassword()
+	}
+
+	code := h.run("account", "add", "--email", "me@example.org")
+
+	if code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, h.stderr.String())
+	}
+	if strings.Join(order, ",") != "confirm,password" {
+		t.Errorf("order = %v, want the confirmation before the password", order)
+	}
+	for _, want := range []string{"imap.found.example.org:143", "starttls", "https://dav.found.example.org/", "found-user", account.SourceAutoconfig, account.SourceWellKnown} {
+		if !strings.Contains(h.stdout.String(), want) {
+			t.Errorf("output %q doesn't mention %q", h.stdout.String(), want)
+		}
+	}
+	got, err := h.cli.store.Load()
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	want := account.Account{
+		Email:    "me@example.org",
+		Username: "found-user",
+		IMAP:     account.IMAP{Addr: "imap.found.example.org:143", Security: account.SecurityStartTLS},
+		CalDAV:   account.CalDAV{URL: "https://dav.found.example.org/"},
+	}
+	if *got != want {
+		t.Errorf("account = %+v, want %+v", *got, want)
+	}
+}
+
+func TestAccountAddDecliningSavesNothing(t *testing.T) {
+	h := newHarness(t)
+	h.cli.discoverer = discovered()
+	h.answer = false
+
+	code := h.run("account", "add", "--email", "me@example.org")
+
+	if code == 0 {
+		t.Error("exit code = 0 after declining")
+	}
+	if h.prompts != 0 {
+		t.Error("asked for the password after declining")
+	}
+	if _, err := h.cli.store.Load(); !errors.Is(err, account.ErrNoAccount) {
+		t.Errorf("load: err = %v, want no account saved", err)
+	}
+}
+
+func TestAccountAddConfirmFailureSavesNothing(t *testing.T) {
+	h := newHarness(t)
+	h.cli.discoverer = discovered()
+	h.cli.confirm = func() (bool, error) { return false, errors.New("no terminal") }
+
+	if code := h.run("account", "add", "--email", "me@example.org"); code == 0 {
+		t.Error("exit code = 0 without a confirmation")
+	}
+	if !strings.Contains(h.stderr.String(), "--imap") {
+		t.Errorf("stderr = %q, want it to point at the flags", h.stderr.String())
+	}
+	if _, err := h.cli.store.Load(); !errors.Is(err, account.ErrNoAccount) {
+		t.Errorf("load: err = %v, want no account saved", err)
+	}
+}
+
+func TestAccountAddFlagsSkipDiscoveryForThatService(t *testing.T) {
+	h := newHarness(t)
+	fake := discovered()
+	h.cli.discoverer = fake
+	h.answer = true
+
+	code := h.run("account", "add", "--email", "me@example.org", "--username", "flag-user",
+		"--imap", "imap.flag.example.org:993")
+
+	if code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, h.stderr.String())
+	}
+	if fake.calls != 1 {
+		t.Errorf("discovery calls = %d, want only CalDAV's", fake.calls)
+	}
+	got, err := h.cli.store.Load()
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if got.IMAP.Addr != "imap.flag.example.org:993" || got.CalDAV.URL != "https://dav.found.example.org/" || got.Username != "flag-user" {
+		t.Errorf("account = %+v", *got)
+	}
+}
+
+func TestAccountAddFlagsForEverythingNeedNoConfirmation(t *testing.T) {
+	h := newHarness(t)
+	fake := discovered()
+	h.cli.discoverer = fake
+
+	if code := h.run(addArgs...); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, h.stderr.String())
+	}
+
+	if fake.calls != 0 || h.confirms != 0 {
+		t.Errorf("discovery calls = %d, confirmations = %d, want none", fake.calls, h.confirms)
+	}
+}
+
+func TestAccountAddDiscoveredPlainTransportIsRefused(t *testing.T) {
+	h := newHarness(t)
+	fake := discovered()
+	fake.caldav.CalDAV.URL = "http://dav.found.example.org/"
+	h.cli.discoverer = fake
+	h.answer = true
+
+	if code := h.run("account", "add", "--email", "me@example.org"); code == 0 {
+		t.Error("saved an account with plain HTTP")
+	}
+	if h.confirms != 0 || h.prompts != 0 {
+		t.Errorf("confirmations = %d, prompts = %d, want the refusal first", h.confirms, h.prompts)
+	}
+}
+
+func TestAccountAddISPDBFlag(t *testing.T) {
+	tests := map[string]struct {
+		args []string
+		want bool
+	}{
+		"on by default": {nil, true},
+		"turned off":    {[]string{"--no-ispdb"}, false},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			h := newHarness(t)
+			fake := discovered()
+			h.cli.discoverer = fake
+			h.answer = true
+
+			args := append([]string{"account", "add", "--email", "me@example.org"}, tt.args...)
+			if code := h.run(args...); code != 0 {
+				t.Fatalf("exit code = %d", code)
+			}
+
+			if fake.useISPDB != tt.want {
+				t.Errorf("useISPDB = %v, want %v", fake.useISPDB, tt.want)
+			}
+		})
 	}
 }

@@ -2,6 +2,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"runtime/debug"
+	"strings"
 	"syscall"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -20,8 +22,9 @@ import (
 )
 
 const usage = `usage:
-  pim-mcp account add --email ADDRESS --imap HOST:PORT --caldav URL
-                      [--username NAME] [--imap-security tls|starttls|none]
+  pim-mcp account add --email ADDRESS [--username NAME] [--imap HOST:PORT]
+                      [--imap-security tls|starttls|none] [--caldav URL]
+                      [--no-ispdb]
   pim-mcp account show
   pim-mcp account remove
   pim-mcp serve      run the MCP server over stdio
@@ -39,12 +42,20 @@ func main() {
 type cli struct {
 	stdout, stderr io.Writer
 	store          *account.Store
+	discoverer     discoverer
 	readPassword   func() (string, error)
+	confirm        func() (bool, error)
+}
+
+type discoverer interface {
+	DiscoverIMAP(ctx context.Context, email string, useISPDB bool) (*account.FoundIMAP, error)
+	DiscoverCalDAV(ctx context.Context, email string) (*account.FoundCalDAV, error)
 }
 
 func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
-	c := &cli{stdout: stdout, stderr: stderr}
+	c := &cli{stdout: stdout, stderr: stderr, discoverer: &account.Discoverer{}}
 	c.readPassword = c.promptPassword
+	c.confirm = c.promptConfirm
 	// A missing home directory only matters to the commands that need it.
 	c.store, _ = account.DefaultStore()
 	return c.run(ctx, args)
@@ -64,7 +75,7 @@ func (c *cli) run(ctx context.Context, args []string) int {
 		if c.store == nil {
 			return c.fail(errors.New("can't find the config directory, is HOME set?"))
 		}
-		return c.runAccount(args[1:])
+		return c.runAccount(ctx, args[1:])
 	case args[0] == "version" && len(args) == 1:
 		if _, err := fmt.Fprintf(c.stdout, "pim-mcp %s\n", version); err != nil {
 			return 1
@@ -84,6 +95,18 @@ func (c *cli) run(ctx context.Context, args []string) int {
 func (c *cli) fail(err error) int {
 	_, _ = fmt.Fprintf(c.stderr, "pim-mcp: %v\n", err)
 	return 1
+}
+
+// promptConfirm asks before a password goes to servers that DNS or a website
+// named. Anything but an explicit yes declines.
+func (c *cli) promptConfirm() (bool, error) {
+	_, _ = fmt.Fprint(c.stderr, "Send your password to these servers? [y/N] ")
+	answer, err := bufio.NewReader(os.Stdin).ReadString('\n')
+	if err != nil {
+		return false, err
+	}
+	answer = strings.ToLower(strings.TrimSpace(answer))
+	return answer == "y" || answer == "yes", nil
 }
 
 // promptPassword reads from the terminal without echoing, and prompts on stderr

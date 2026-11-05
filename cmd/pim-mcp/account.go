@@ -1,23 +1,25 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/robinvdvleuten/pim-mcp/internal/account"
 )
 
-func (c *cli) runAccount(args []string) int {
+func (c *cli) runAccount(ctx context.Context, args []string) int {
 	if len(args) == 0 {
 		_, _ = fmt.Fprint(c.stderr, usage)
 		return 2
 	}
 	switch args[0] {
 	case "add":
-		return c.accountAdd(args[1:])
+		return c.accountAdd(ctx, args[1:])
 	case "show", "remove":
 		if len(args) != 1 {
 			_, _ = fmt.Fprint(c.stderr, usage)
@@ -33,7 +35,7 @@ func (c *cli) runAccount(args []string) int {
 	}
 }
 
-func (c *cli) accountAdd(args []string) int {
+func (c *cli) accountAdd(ctx context.Context, args []string) int {
 	flags := flag.NewFlagSet("account add", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	email := flags.String("email", "", "")
@@ -41,33 +43,13 @@ func (c *cli) accountAdd(args []string) int {
 	imap := flags.String("imap", "", "")
 	imapSecurity := flags.String("imap-security", "", "")
 	caldav := flags.String("caldav", "", "")
+	noISPDB := flags.Bool("no-ispdb", false, "")
 	if err := flags.Parse(args); err != nil || flags.NArg() != 0 {
 		_, _ = fmt.Fprint(c.stderr, usage)
 		return 2
 	}
-
-	switch {
-	case *email == "":
+	if *email == "" {
 		return c.fail(errors.New("--email is required"))
-	case *imap == "":
-		return c.fail(errors.New("--imap is required"))
-	case *caldav == "":
-		return c.fail(errors.New("--caldav is required"))
-	}
-	a := account.Account{
-		Email:    *email,
-		Username: *username,
-		IMAP:     account.IMAP{Addr: *imap, Security: *imapSecurity},
-		CalDAV:   account.CalDAV{URL: *caldav},
-	}
-	if a.Username == "" {
-		a.Username = a.Email
-	}
-	if a.IMAP.Security == "" {
-		a.IMAP.Security = account.DefaultIMAPSecurity(a.IMAP.Addr)
-	}
-	if err := a.Validate(); err != nil {
-		return c.fail(err)
 	}
 
 	existing, err := c.store.Load()
@@ -76,6 +58,37 @@ func (c *cli) accountAdd(args []string) int {
 	}
 	if !errors.Is(err, account.ErrNoAccount) {
 		return c.fail(err)
+	}
+
+	a := account.Account{
+		Email:    *email,
+		Username: *username,
+		IMAP:     account.IMAP{Addr: *imap, Security: *imapSecurity},
+		CalDAV:   account.CalDAV{URL: *caldav},
+	}
+	if a.IMAP.Addr != "" && a.IMAP.Security == "" {
+		a.IMAP.Security = account.DefaultIMAPSecurity(a.IMAP.Addr)
+	}
+	found, err := c.discover(ctx, &a, !*noISPDB)
+	if err != nil {
+		return c.fail(err)
+	}
+	if a.Username == "" {
+		a.Username = a.Email
+	}
+	if err := a.Validate(); err != nil {
+		return c.fail(err)
+	}
+
+	if found != "" {
+		_, _ = fmt.Fprintf(c.stdout, "Found for %s:\n%s  username: %s\n", a.Email, found, a.Username)
+		confirmed, err := c.confirm()
+		if err != nil {
+			return c.fail(fmt.Errorf("read answer: %w (without a terminal, pass --imap and --caldav)", err))
+		}
+		if !confirmed {
+			return c.fail(errors.New("nothing saved"))
+		}
 	}
 
 	storedPassword, err := c.storePassword(a.Email)
@@ -90,6 +103,32 @@ func (c *cli) accountAdd(args []string) int {
 	}
 	_, _ = fmt.Fprintf(c.stdout, "Added %s.\n", a.Email)
 	return 0
+}
+
+// discover fills in the services the flags left out, and describes what it
+// found. An explicit flag always wins.
+func (c *cli) discover(ctx context.Context, a *account.Account, useISPDB bool) (string, error) {
+	var found strings.Builder
+	if a.IMAP.Addr == "" {
+		imap, err := c.discoverer.DiscoverIMAP(ctx, a.Email, useISPDB)
+		if err != nil {
+			return "", fmt.Errorf("%w, pass --imap", err)
+		}
+		a.IMAP = imap.IMAP
+		if a.Username == "" {
+			a.Username = imap.Username
+		}
+		fmt.Fprintf(&found, "  imap:     %s (%s), from %s\n", a.IMAP.Addr, a.IMAP.Security, imap.Source)
+	}
+	if a.CalDAV.URL == "" {
+		caldav, err := c.discoverer.DiscoverCalDAV(ctx, a.Email)
+		if err != nil {
+			return "", fmt.Errorf("%w, pass --caldav", err)
+		}
+		a.CalDAV = caldav.CalDAV
+		fmt.Fprintf(&found, "  caldav:   %s, from %s\n", a.CalDAV.URL, caldav.Source)
+	}
+	return found.String(), nil
 }
 
 // storePassword asks for the password and puts it in the keychain, unless the

@@ -27,6 +27,8 @@ type Occurrence struct {
 	Recurring    bool      `json:"recurring"`
 	Status       string    `json:"status"`
 	Organizer    string    `json:"organizer"`
+	// Transparent means the event doesn't take up time, for free/busy.
+	Transparent bool `json:"-"`
 }
 
 // Parse decodes a single iCalendar object.
@@ -54,6 +56,9 @@ func eventTemplate(event *goical.Event) Occurrence {
 	}
 	if prop := event.Props.Get(goical.PropStatus); prop != nil {
 		occurrence.Status = strings.ToLower(prop.Value)
+	}
+	if prop := event.Props.Get(goical.PropTransparency); prop != nil {
+		occurrence.Transparent = strings.EqualFold(prop.Value, "TRANSPARENT")
 	}
 	return occurrence
 }

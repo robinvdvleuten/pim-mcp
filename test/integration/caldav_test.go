@@ -491,3 +491,27 @@ func TestCalendarListEventsReturnsNoICalendar(t *testing.T) {
 		}
 	})
 }
+
+func TestCalendarFreeBusy(t *testing.T) {
+	eachCalDAVServer(t, func(t *testing.T, s caldavServer, c *calendar.Client) {
+		// A day no other test uses, as servers keep events between tests.
+		createEvent(t, c, s, "BEGIN:VEVENT", "UID:@", "DTSTAMP:20261101T120000Z", "DTSTART:20280310T090000Z", "DTEND:20280310T100000Z", "RRULE:FREQ=DAILY;COUNT=2", "SUMMARY:Busy", "END:VEVENT")
+		createEvent(t, c, s, "BEGIN:VEVENT", "UID:@", "DTSTAMP:20261101T120000Z", "DTSTART:20280310T120000Z", "DTEND:20280310T130000Z", "TRANSP:TRANSPARENT", "SUMMARY:Free", "END:VEVENT")
+		session := calendarSession(t, s)
+
+		got := callTool[calendar.FreeBusy](t, session, "calendar_free_busy", map[string]any{
+			"start": "2028-03-10T00:00:00Z", "end": "2028-03-12T00:00:00Z", "calendar_ids": []string{s.calendar},
+		})
+
+		if len(got.Busy) < 2 {
+			t.Fatalf("busy = %+v", got.Busy)
+		}
+		first, second := got.Busy[0], got.Busy[1]
+		if !first.Start.Equal(time.Date(2028, 3, 10, 9, 0, 0, 0, time.UTC)) || !first.End.Equal(time.Date(2028, 3, 10, 10, 0, 0, 0, time.UTC)) {
+			t.Errorf("first = %+v", first)
+		}
+		if !second.Start.Equal(time.Date(2028, 3, 11, 9, 0, 0, 0, time.UTC)) {
+			t.Errorf("second = %+v, the transparent event must not count", second)
+		}
+	})
+}

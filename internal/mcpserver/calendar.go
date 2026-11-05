@@ -50,14 +50,16 @@ func (s *Server) registerCalendar() {
 	addTool(s, &mcp.Tool{
 		Name: "calendar_update_event",
 		Description: "Change an event. Give the event_id and etag from calendar_list_events. If the event changed since then, " +
-			"this returns a conflict and changes nothing: read it again and decide again. scope is series for the whole event. " +
+			"this returns a conflict and changes nothing: read it again and decide again. Use scope series for the whole event, " +
+			"or scope occurrence with an occurrence_id for one occurrence of a recurring event. " +
 			"Only the fields given change. An empty location or description clears it.",
 		Annotations: &mcp.ToolAnnotations{},
 	}, s.calendarUpdateEvent)
 	addTool(s, &mcp.Tool{
 		Name: "calendar_delete_event",
 		Description: "Delete an event. Give the event_id and etag from calendar_list_events. If the event changed since then, " +
-			"this returns a conflict and deletes nothing. scope is series for the whole event.",
+			"this returns a conflict and deletes nothing. Use scope series for the whole event, including every occurrence, " +
+			"or scope occurrence with an occurrence_id for one occurrence of a recurring event.",
 		Annotations: &mcp.ToolAnnotations{DestructiveHint: boolPtr(true)},
 	}, s.calendarDeleteEvent)
 }
@@ -239,8 +241,8 @@ func boolPtr(value bool) *bool { return &value }
 type UpdateEventInput struct {
 	EventID      string  `json:"event_id" jsonschema:"event_id from calendar_list_events"`
 	ETag         string  `json:"etag" jsonschema:"etag from calendar_list_events"`
-	Scope        string  `json:"scope" jsonschema:"series for the whole event"`
-	OccurrenceID string  `json:"occurrence_id,omitempty" jsonschema:"occurrence_id from calendar_list_events"`
+	Scope        string  `json:"scope" jsonschema:"series for the whole event, occurrence for one occurrence"`
+	OccurrenceID string  `json:"occurrence_id,omitempty" jsonschema:"occurrence_id from calendar_list_events, only with scope occurrence"`
 	Summary      *string `json:"summary,omitempty"`
 	Location     *string `json:"location,omitempty"`
 	Description  *string `json:"description,omitempty"`
@@ -301,8 +303,8 @@ func (s *Server) calendarUpdateEvent(ctx context.Context, _ *mcp.CallToolRequest
 type DeleteEventInput struct {
 	EventID      string `json:"event_id" jsonschema:"event_id from calendar_list_events"`
 	ETag         string `json:"etag" jsonschema:"etag from calendar_list_events"`
-	Scope        string `json:"scope" jsonschema:"series for the whole event"`
-	OccurrenceID string `json:"occurrence_id,omitempty" jsonschema:"occurrence_id from calendar_list_events"`
+	Scope        string `json:"scope" jsonschema:"series for the whole event, occurrence for one occurrence"`
+	OccurrenceID string `json:"occurrence_id,omitempty" jsonschema:"occurrence_id from calendar_list_events, only with scope occurrence"`
 }
 
 func (s *Server) calendarDeleteEvent(ctx context.Context, _ *mcp.CallToolRequest, in DeleteEventInput) (*mcp.CallToolResult, calendar.DeletedEvent, error) {
@@ -311,7 +313,7 @@ func (s *Server) calendarDeleteEvent(ctx context.Context, _ *mcp.CallToolRequest
 		return nil, calendar.DeletedEvent{}, err
 	}
 	defer cancel()
-	deleted, err := client.DeleteEvent(ctx, in.EventID, in.ETag, in.Scope, in.OccurrenceID)
+	deleted, err := client.DeleteEvent(ctx, in.EventID, in.ETag, in.Scope, in.OccurrenceID, s.options.Zone)
 	if err != nil {
 		return nil, calendar.DeletedEvent{}, err
 	}

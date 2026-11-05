@@ -85,24 +85,52 @@ type DeletedEvent struct {
 	Deleted string `json:"deleted"`
 }
 
-// UpdateEvent changes a stored event, if it is still the one the caller read. The
-// server's copy decides what the change applies to, and checking the ETag up
-// front means a stale caller finds out before anything is computed from it.
-func (c *Client) UpdateEvent(ctx context.Context, eventID, etag, scope, _ string, patch ical.EventPatch, loc *time.Location) (*UpdatedEvent, error) {
-	if etag == "" {
-		return nil, fmt.Errorf("update %s: an etag is required", eventID)
+// checkScope makes a mismatch an error. Quietly ignoring an occurrence_id would
+// turn "delete this one" into "delete them all".
+func checkScope(scope, occurrenceID string) error {
+	switch {
+	case scope == ScopeSeries && occurrenceID != "":
+		return fmt.Errorf("scope %s applies to the whole event, so it takes no occurrence_id", ScopeSeries)
+	case scope == ScopeOccurrence && occurrenceID == "":
+		return fmt.Errorf("scope %s needs an occurrence_id", ScopeOccurrence)
+	case scope != ScopeSeries && scope != ScopeOccurrence:
+		return fmt.Errorf("scope must be %s or %s", ScopeSeries, ScopeOccurrence)
 	}
-	if scope != ScopeSeries {
-		return nil, fmt.Errorf("scope must be %s", ScopeSeries)
+	return nil
+}
+
+// current returns the stored event, if it is still the one the caller read. The
+// server's copy is what a change gets applied to, so a stale caller finds out
+// before anything is computed from it.
+func (c *Client) current(ctx context.Context, eventID, etag string) (*Object, error) {
+	if etag == "" {
+		return nil, fmt.Errorf("event %s: an etag is required", eventID)
 	}
 	object, err := c.Get(ctx, eventID)
 	if err != nil {
 		return nil, err
 	}
 	if object.ETag != etag {
-		return nil, fmt.Errorf("update %s: %w", eventID, ErrConflict)
+		return nil, fmt.Errorf("event %s: %w", eventID, ErrConflict)
 	}
-	data, err := ical.EditSeries(object.Data, patch, loc, time.Now())
+	return object, nil
+}
+
+// UpdateEvent changes a stored event, if it is still the one the caller read.
+func (c *Client) UpdateEvent(ctx context.Context, eventID, etag, scope, occurrenceID string, patch ical.EventPatch, loc *time.Location) (*UpdatedEvent, error) {
+	if err := checkScope(scope, occurrenceID); err != nil {
+		return nil, err
+	}
+	object, err := c.current(ctx, eventID, etag)
+	if err != nil {
+		return nil, err
+	}
+	var data []byte
+	if scope == ScopeOccurrence {
+		data, err = ical.EditOccurrence(object.Data, occurrenceID, patch, loc, time.Now())
+	} else {
+		data, err = ical.EditSeries(object.Data, patch, loc, time.Now())
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -117,16 +145,39 @@ func (c *Client) UpdateEvent(ctx context.Context, eventID, etag, scope, _ string
 	return &UpdatedEvent{EventID: eventID, ETag: newETag, First: first}, nil
 }
 
-// DeleteEvent removes a stored event, if it is still the one the caller read.
-func (c *Client) DeleteEvent(ctx context.Context, eventID, etag, scope, _ string) (*DeletedEvent, error) {
-	if etag == "" {
-		return nil, fmt.Errorf("delete %s: an etag is required", eventID)
-	}
-	if scope != ScopeSeries {
-		return nil, fmt.Errorf("scope must be %s", ScopeSeries)
-	}
-	if err := c.Delete(ctx, eventID, etag); err != nil {
+// DeleteEvent removes a stored event or one of its occurrences, if it is still
+// the one the caller read.
+func (c *Client) DeleteEvent(ctx context.Context, eventID, etag, scope, occurrenceID string, loc *time.Location) (*DeletedEvent, error) {
+	if err := checkScope(scope, occurrenceID); err != nil {
 		return nil, err
 	}
-	return &DeletedEvent{EventID: eventID, Deleted: ScopeSeries}, nil
+	if etag == "" {
+		return nil, fmt.Errorf("event %s: an etag is required", eventID)
+	}
+	if scope == ScopeSeries {
+		if err := c.Delete(ctx, eventID, etag); err != nil {
+			return nil, err
+		}
+		return &DeletedEvent{EventID: eventID, Deleted: ScopeSeries}, nil
+	}
+
+	object, err := c.current(ctx, eventID, etag)
+	if err != nil {
+		return nil, err
+	}
+	data, err := ical.DeleteOccurrence(object.Data, occurrenceID, loc, time.Now())
+	if err != nil {
+		return nil, err
+	}
+	if data == nil {
+		if err := c.Delete(ctx, eventID, etag); err != nil {
+			return nil, err
+		}
+		return &DeletedEvent{EventID: eventID, Deleted: ScopeOccurrence}, nil
+	}
+	newETag, err := c.Update(ctx, eventID, etag, data)
+	if err != nil {
+		return nil, err
+	}
+	return &DeletedEvent{EventID: eventID, ETag: newETag, Deleted: ScopeOccurrence}, nil
 }

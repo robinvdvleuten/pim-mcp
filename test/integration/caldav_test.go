@@ -731,3 +731,71 @@ func TestCalendarUpdateMovesSeriesWithItsExceptions(t *testing.T) {
 		}
 	})
 }
+
+func TestCalendarUpdateOneOccurrence(t *testing.T) {
+	eachCalDAVServer(t, func(t *testing.T, s caldavServer, c *calendar.Client) {
+		path, uid := createWeekly(t, c, s)
+		events := seriesOf(t, c, s, uid)
+		session := calendarSession(t, s)
+
+		callTool[calendar.UpdatedEvent](t, session, "calendar_update_event", map[string]any{
+			"event_id": path, "etag": events[2].ETag, "scope": "occurrence", "occurrence_id": events[2].OccurrenceID,
+			"summary": "Just this one", "start": "2030-01-25T15:00", "timezone": "Europe/Amsterdam",
+		})
+
+		got := seriesOf(t, c, s, uid)
+		if len(got) != 3 {
+			t.Fatalf("events = %+v", got)
+		}
+		want := []struct{ summary, start string }{
+			{"Weekly", "2030-01-07T09:00:00Z"},
+			{"Special", "2030-01-14T09:00:00Z"},
+			{"Just this one", "2030-01-25T14:00:00Z"},
+		}
+		for i, w := range want {
+			if got[i].Summary != w.summary || got[i].Start.UTC().Format(time.RFC3339) != w.start {
+				t.Errorf("event %d = %q at %s, want %+v", i, got[i].Summary, got[i].Start.UTC().Format(time.RFC3339), w)
+			}
+		}
+		if got[2].OccurrenceID != events[2].OccurrenceID {
+			t.Errorf("id = %s, want it kept: %s", got[2].OccurrenceID, events[2].OccurrenceID)
+		}
+	})
+}
+
+func TestCalendarDeleteOneOccurrence(t *testing.T) {
+	eachCalDAVServer(t, func(t *testing.T, s caldavServer, c *calendar.Client) {
+		path, uid := createWeekly(t, c, s)
+		events := seriesOf(t, c, s, uid)
+		session := calendarSession(t, s)
+
+		deleted := callTool[calendar.DeletedEvent](t, session, "calendar_delete_event", map[string]any{
+			"event_id": path, "etag": events[0].ETag, "scope": "occurrence", "occurrence_id": events[0].OccurrenceID,
+		})
+
+		got := seriesOf(t, c, s, uid)
+		if len(got) != 2 || got[0].Summary != "Special" || got[1].Summary != "Weekly" {
+			t.Errorf("events = %+v", got)
+		}
+		if deleted.ETag == "" || deleted.ETag != got[0].ETag {
+			t.Errorf("etag = %q, a read says %q", deleted.ETag, got[0].ETag)
+		}
+	})
+}
+
+func TestCalendarDeleteAMovedOccurrence(t *testing.T) {
+	eachCalDAVServer(t, func(t *testing.T, s caldavServer, c *calendar.Client) {
+		path, uid := createWeekly(t, c, s)
+		events := seriesOf(t, c, s, uid)
+		session := calendarSession(t, s)
+
+		callTool[calendar.DeletedEvent](t, session, "calendar_delete_event", map[string]any{
+			"event_id": path, "etag": events[1].ETag, "scope": "occurrence", "occurrence_id": events[1].OccurrenceID,
+		})
+
+		got := seriesOf(t, c, s, uid)
+		if len(got) != 2 || got[0].Summary != "Weekly" || got[1].Summary != "Weekly" {
+			t.Errorf("events = %+v", got)
+		}
+	})
+}

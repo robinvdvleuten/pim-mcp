@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -185,17 +186,9 @@ func moveSeries(z *zones, s *series, patch EventPatch) error {
 		}
 	}
 
-	var newEnd time.Time
-	switch {
-	case patch.End != nil && patch.AllDay:
-		newEnd = midnightIn(*patch.End, z.floating)
-	case patch.End != nil:
-		newEnd = *patch.End
-	default:
-		newEnd = length.end(newStart)
-	}
-	if !newEnd.After(newStart) {
-		return errors.New("the end has to be after the start")
+	newEnd, err := patchedEnd(z, patch, newStart, length)
+	if err != nil {
+		return err
 	}
 
 	if err := shiftExceptions(z, s, delta); err != nil {
@@ -207,6 +200,22 @@ func moveSeries(z *zones, s *series, patch EventPatch) error {
 
 	setMoment(master.Component, goical.PropDateTimeStart, startProp, newStart, patch.AllDay && patch.Start != nil || oldIsDate && patch.Start == nil)
 	return setEnd(master.Component, patch, startProp, newEnd, oldIsDate)
+}
+
+func patchedEnd(z *zones, patch EventPatch, newStart time.Time, length span) (time.Time, error) {
+	var newEnd time.Time
+	switch {
+	case patch.End != nil && patch.AllDay:
+		newEnd = midnightIn(*patch.End, z.floating)
+	case patch.End != nil:
+		newEnd = *patch.End
+	default:
+		newEnd = length.end(newStart)
+	}
+	if !newEnd.After(newStart) {
+		return time.Time{}, errors.New("the end has to be after the start")
+	}
+	return newEnd, nil
 }
 
 // setEnd keeps DURATION for an event that only moved, as its length is unchanged.
@@ -229,6 +238,10 @@ func setEnd(component *goical.Component, patch EventPatch, startProp *goical.Pro
 // setMoment writes a time the way the property it replaces was written: in the
 // same zone, so a series keeps following that zone's clock.
 func setMoment(component *goical.Component, name string, reference *goical.Prop, at time.Time, isDate bool) {
+	component.Props.Set(momentProp(name, reference, at, isDate))
+}
+
+func momentProp(name string, reference *goical.Prop, at time.Time, isDate bool) *goical.Prop {
 	prop := goical.NewProp(name)
 	switch {
 	case isDate:
@@ -242,7 +255,7 @@ func setMoment(component *goical.Component, name string, reference *goical.Prop,
 	default:
 		prop.Value = at.UTC().Format(utcFormat)
 	}
-	component.Props.Set(prop)
+	return prop
 }
 
 // wallClock returns what a clock in the time's own zone shows, as a UTC time, so
@@ -373,4 +386,212 @@ func shiftProp(z *zones, prop *goical.Prop, delta time.Duration) error {
 	}
 	prop.Value = strings.Join(values, ",")
 	return nil
+}
+
+// occurrenceSlot reads an occurrence_id. It reports whether it names a date.
+func occurrenceSlot(z *zones, id string) (time.Time, bool, error) {
+	switch len(id) {
+	case len(dateFormat):
+		if at, err := time.ParseInLocation(dateFormat, id, z.floating); err == nil {
+			return at, true, nil
+		}
+	case len(utcFormat):
+		if at, err := time.ParseInLocation(utcFormat, id, time.UTC); err == nil {
+			return at, false, nil
+		}
+	}
+	return time.Time{}, false, fmt.Errorf("%q is not an occurrence_id from calendar_list_events", id)
+}
+
+// findOccurrence locates an instance: its override if it has one, and whether
+// the series itself produces it.
+func findOccurrence(z *zones, s *series, slot time.Time) (*goical.Event, bool, error) {
+	var override *goical.Event
+	for _, event := range s.overrides {
+		id, _, err := recurrenceID(z, event)
+		if err != nil {
+			return nil, false, err
+		}
+		if id.Equal(slot) {
+			override = event
+		}
+	}
+	if len(s.masters) == 0 {
+		return override, false, nil
+	}
+	occurrences, err := expandMaster(z, s.masters[0], nil, slot, slot.Add(time.Second))
+	if err != nil {
+		return nil, false, err
+	}
+	for _, occurrence := range occurrences {
+		if occurrence.Recurring && occurrence.Start.Equal(slot) {
+			return override, true, nil
+		}
+	}
+	return override, false, nil
+}
+
+func loadSeries(data []byte, id string, loc *time.Location) (*goical.Calendar, *zones, *series, time.Time, *goical.Event, bool, error) {
+	fail := func(err error) (*goical.Calendar, *zones, *series, time.Time, *goical.Event, bool, error) {
+		return nil, nil, nil, time.Time{}, nil, false, err
+	}
+	cal, err := Parse(data)
+	if err != nil {
+		return fail(err)
+	}
+	z := newZones(cal, loc)
+	all := groupSeries(cal.Events())
+	if len(all) != 1 {
+		return fail(errors.New("expected one event, found several"))
+	}
+	s := all[0]
+	if len(s.masters) == 1 && len(s.overrides) == 0 &&
+		s.masters[0].Props.Get(goical.PropRecurrenceRule) == nil && s.masters[0].Props.Get(goical.PropRecurrenceDates) == nil {
+		return fail(errors.New("this event doesn't repeat, use scope series"))
+	}
+	slot, _, err := occurrenceSlot(z, id)
+	if err != nil {
+		return fail(err)
+	}
+	override, inSeries, err := findOccurrence(z, s, slot)
+	if err != nil {
+		return fail(err)
+	}
+	if override == nil && !inSeries {
+		return fail(fmt.Errorf("this event has no occurrence %s", id))
+	}
+	return cal, z, s, slot, override, inSeries, nil
+}
+
+// EditOccurrence changes one instance of a recurring event, by way of an override
+// that says how it differs from the rest. The override is a copy of the series,
+// so it keeps the alarms and everything else the instance had.
+func EditOccurrence(data []byte, id string, patch EventPatch, loc *time.Location, now time.Time) ([]byte, error) {
+	if err := patch.check(); err != nil {
+		return nil, err
+	}
+	cal, z, s, slot, override, _, err := loadSeries(data, id, loc)
+	if err != nil {
+		return nil, err
+	}
+	if override == nil {
+		if override, err = newOverride(z, cal, s.masters[0], slot); err != nil {
+			return nil, err
+		}
+	}
+	applyText(override.Component, patch)
+	if patch.Start != nil || patch.End != nil {
+		if err := moveOverride(z, override, patch); err != nil {
+			return nil, err
+		}
+	}
+	touch(override.Component, now)
+	return encode(cal)
+}
+
+func moveOverride(z *zones, event *goical.Event, patch EventPatch) error {
+	startProp := event.Props.Get(goical.PropDateTimeStart)
+	if startProp == nil {
+		return errors.New("no DTSTART")
+	}
+	oldStart, isDate, err := z.dateTime(startProp)
+	if err != nil {
+		return fmt.Errorf("read DTSTART: %w", err)
+	}
+	if patch.AllDay != isDate && patch.Start != nil {
+		return errors.New("an occurrence can't become all-day or timed on its own")
+	}
+	length, err := readLength(z, event, oldStart, isDate)
+	if err != nil {
+		return err
+	}
+	newStart := oldStart
+	if patch.Start != nil {
+		if patch.AllDay {
+			newStart = midnightIn(*patch.Start, z.floating)
+		} else {
+			newStart = patch.Start.In(oldStart.Location())
+		}
+	}
+	newEnd, err := patchedEnd(z, patch, newStart, length)
+	if err != nil {
+		return err
+	}
+	setMoment(event.Component, goical.PropDateTimeStart, startProp, newStart, isDate)
+	return setEnd(event.Component, patch, startProp, newEnd, isDate)
+}
+
+// newOverride copies the series for one slot and adds it to the calendar.
+func newOverride(z *zones, cal *goical.Calendar, master *goical.Event, slot time.Time) (*goical.Event, error) {
+	startProp := master.Props.Get(goical.PropDateTimeStart)
+	start, isDate, err := z.dateTime(startProp)
+	if err != nil {
+		return nil, fmt.Errorf("read DTSTART: %w", err)
+	}
+	length, err := readLength(z, master, start, isDate)
+	if err != nil {
+		return nil, err
+	}
+	copied := cloneComponent(master.Component)
+	for _, name := range []string{goical.PropRecurrenceRule, goical.PropRecurrenceDates, goical.PropExceptionDates, "EXRULE"} {
+		copied.Props.Del(name)
+	}
+	at := slot.In(start.Location())
+	setMoment(copied, goical.PropRecurrenceID, startProp, at, isDate)
+	setMoment(copied, goical.PropDateTimeStart, startProp, at, isDate)
+	if endProp := copied.Props.Get(goical.PropDateTimeEnd); endProp != nil {
+		setMoment(copied, goical.PropDateTimeEnd, endProp, length.end(at), isDate)
+	}
+	cal.Children = append(cal.Children, copied)
+	return &goical.Event{Component: copied}, nil
+}
+
+func cloneComponent(component *goical.Component) *goical.Component {
+	clone := goical.NewComponent(component.Name)
+	for name, props := range component.Props {
+		for _, prop := range props {
+			copied := prop
+			copied.Params = make(goical.Params, len(prop.Params))
+			for key, values := range prop.Params {
+				copied.Params[key] = slices.Clone(values)
+			}
+			clone.Props[name] = append(clone.Props[name], copied)
+		}
+	}
+	for _, child := range component.Children {
+		clone.Children = append(clone.Children, cloneComponent(child))
+	}
+	return clone
+}
+
+// DeleteOccurrence removes one instance of a recurring event. It returns nil if
+// that leaves nothing to store. An EXDATE removes it from the series, and any
+// override goes with it, as it would otherwise bring the instance back.
+func DeleteOccurrence(data []byte, id string, loc *time.Location, now time.Time) ([]byte, error) {
+	cal, z, s, slot, override, inSeries, err := loadSeries(data, id, loc)
+	if err != nil {
+		return nil, err
+	}
+	if override != nil {
+		cal.Children = slices.DeleteFunc(cal.Children, func(child *goical.Component) bool {
+			return child == override.Component
+		})
+	}
+	if len(s.masters) == 0 {
+		if len(s.overrides) == 1 {
+			return nil, nil
+		}
+		return encode(cal)
+	}
+	master := s.masters[0]
+	if inSeries || override != nil {
+		startProp := master.Props.Get(goical.PropDateTimeStart)
+		start, isDate, err := z.dateTime(startProp)
+		if err != nil {
+			return nil, fmt.Errorf("read DTSTART: %w", err)
+		}
+		master.Props.Add(momentProp(goical.PropExceptionDates, startProp, slot.In(start.Location()), isDate))
+	}
+	touch(master.Component, now)
+	return encode(cal)
 }

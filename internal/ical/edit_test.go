@@ -330,3 +330,246 @@ func TestEditSingleEventCanChangeShape(t *testing.T) {
 		}
 	})
 }
+
+func editOccurrence(t *testing.T, data, id string, patch EventPatch) []byte {
+	t.Helper()
+	out, err := EditOccurrence([]byte(data), id, patch, time.UTC, fixedNow)
+	if err != nil {
+		t.Fatalf("edit: %v", err)
+	}
+	return out
+}
+
+func expandBytes(t *testing.T, data []byte, start, end string) []Occurrence {
+	t.Helper()
+	cal, err := Parse(data)
+	if err != nil {
+		t.Fatalf("parse %s: %v", data, err)
+	}
+	got, err := Expand(cal, date(t, start), date(t, end), time.UTC)
+	if err != nil {
+		t.Fatalf("expand: %v", err)
+	}
+	return got
+}
+
+func ids(occurrences []Occurrence) string {
+	parts := make([]string, len(occurrences))
+	for i, o := range occurrences {
+		parts[i] = o.OccurrenceID
+	}
+	return strings.Join(parts, " ")
+}
+
+func TestEditOccurrenceChangesOnlyThatOne(t *testing.T) {
+	out := editOccurrence(t, calendarOf(t, weekly), "20261109T090000Z", EventPatch{Summary: strPtr("Just this one")})
+
+	got := expandBytes(t, out, "2026-11-01T00:00:00Z", "2026-12-01T00:00:00Z")
+	if want := "Weekly@1102T0900 Just this one@1109T0900 Weekly@1116T0900"; summaries(got) != want {
+		t.Errorf("got %s, want %s", summaries(got), want)
+	}
+	if want := "20261102T090000Z 20261109T090000Z 20261116T090000Z"; ids(got) != want {
+		t.Errorf("ids = %s, want %s", ids(got), want)
+	}
+	if got[1].Location != "Room 1" {
+		t.Errorf("location = %q, want it copied from the series", got[1].Location)
+	}
+	if got[1].End.Sub(got[1].Start) != time.Hour {
+		t.Errorf("length = %s", got[1].End.Sub(got[1].Start))
+	}
+}
+
+func TestEditOccurrenceWritesAValidOverride(t *testing.T) {
+	out := string(editOccurrence(t, calendarOf(t, weekly), "20261109T090000Z", EventPatch{Summary: strPtr("x")}))
+
+	if !strings.Contains(out, "RECURRENCE-ID;TZID=Europe/Amsterdam:20261109T100000\r\n") {
+		t.Errorf("RECURRENCE-ID isn't written the way DTSTART is:\n%s", out)
+	}
+	if strings.Count(out, "RRULE") != 1 {
+		t.Errorf("the override must not carry the rule:\n%s", out)
+	}
+	if strings.Count(out, "UID:series@example.org") != 2 {
+		t.Errorf("the override must share the UID:\n%s", out)
+	}
+}
+
+func TestEditOccurrenceCopiesAlarmsWithoutSharingThem(t *testing.T) {
+	data := strings.Replace(calendarOf(t, weekly), "SUMMARY:Weekly\r\n",
+		"SUMMARY:Weekly\r\nBEGIN:VALARM\r\nACTION:DISPLAY\r\nTRIGGER:-PT15M\r\nDESCRIPTION:x\r\nEND:VALARM\r\n", 1)
+
+	out := string(editOccurrence(t, data, "20261109T090000Z", EventPatch{Summary: strPtr("x")}))
+
+	if strings.Count(out, "BEGIN:VALARM") != 2 {
+		t.Errorf("stored:\n%s", out)
+	}
+}
+
+func TestEditOccurrenceMovesIt(t *testing.T) {
+	moved := date(t, "2026-11-20T15:00:00Z")
+
+	out := editOccurrence(t, calendarOf(t, weekly), "20261109T090000Z", EventPatch{Start: &moved})
+
+	got := expandBytes(t, out, "2026-11-01T00:00:00Z", "2026-12-01T00:00:00Z")
+	if want := "Weekly@1102T0900 Weekly@1116T0900 Weekly@1120T1500"; summaries(got) != want {
+		t.Errorf("got %s, want %s", summaries(got), want)
+	}
+	if got[2].OccurrenceID != "20261109T090000Z" {
+		t.Errorf("id = %s, want it to stay the original slot", got[2].OccurrenceID)
+	}
+	if got[2].End.Sub(got[2].Start) != time.Hour {
+		t.Errorf("length = %s", got[2].End.Sub(got[2].Start))
+	}
+}
+
+func TestEditOccurrenceUpdatesAnExistingOverride(t *testing.T) {
+	override := []string{"RECURRENCE-ID;TZID=Europe/Amsterdam:20261109T100000", "DTSTART;TZID=Europe/Amsterdam:20261120T150000", "DTEND;TZID=Europe/Amsterdam:20261120T160000", "SUMMARY:Moved", "LOCATION:Far", "SEQUENCE:2"}
+
+	raw := editOccurrence(t, calendarOf(t, weekly, override), "20261109T090000Z", EventPatch{Summary: strPtr("Moved and renamed")})
+
+	out := string(raw)
+	if strings.Count(out, "RECURRENCE-ID") != 1 {
+		t.Errorf("made a second override:\n%s", out)
+	}
+	if !strings.Contains(out, "SEQUENCE:3") {
+		t.Errorf("sequence not raised:\n%s", out)
+	}
+	got := expandBytes(t, raw, "2026-11-01T00:00:00Z", "2026-12-01T00:00:00Z")
+	if want := "Weekly@1102T0900 Weekly@1116T0900 Moved and renamed@1120T1400"; summaries(got) != want {
+		t.Errorf("got %s, want %s", summaries(got), want)
+	}
+	if got[2].Location != "Far" {
+		t.Errorf("location = %q", got[2].Location)
+	}
+}
+
+func TestEditOccurrenceOfOrphanOverride(t *testing.T) {
+	orphan := []string{"RECURRENCE-ID:20261109T090000Z", "DTSTART:20261109T090000Z", "DTEND:20261109T100000Z", "SUMMARY:Invited to this one"}
+
+	got := expandBytes(t, editOccurrence(t, calendarOf(t, orphan), "20261109T090000Z", EventPatch{Summary: strPtr("Renamed")}),
+		"2026-11-01T00:00:00Z", "2026-12-01T00:00:00Z")
+
+	if len(got) != 1 || got[0].Summary != "Renamed" {
+		t.Errorf("got %+v", got)
+	}
+}
+
+func TestEditOccurrenceOfAllDaySeries(t *testing.T) {
+	series := []string{"DTSTART;VALUE=DATE:20261102", "RRULE:FREQ=DAILY;COUNT=3", "SUMMARY:Holiday"}
+
+	got := expandBytes(t, editOccurrence(t, calendarOf(t, series), "20261103", EventPatch{Summary: strPtr("Different")}),
+		"2026-11-01T00:00:00Z", "2026-12-01T00:00:00Z")
+
+	if want := "Holiday@1102T0000 Different@1103T0000 Holiday@1104T0000"; summaries(got) != want {
+		t.Errorf("got %s, want %s", summaries(got), want)
+	}
+	if got[1].OccurrenceID != "20261103" || !got[1].AllDay {
+		t.Errorf("override = %+v", got[1])
+	}
+}
+
+func TestEditOccurrenceRefusals(t *testing.T) {
+	single := []string{"DTSTART:20261102T090000Z", "DTEND:20261102T100000Z", "SUMMARY:x"}
+	first, last := date(t, "2026-11-10T00:00:00Z"), date(t, "2026-11-11T00:00:00Z")
+	withExdate := append(append([]string{}, weekly...), "EXDATE;TZID=Europe/Amsterdam:20261109T100000")
+	earlier := date(t, "2026-11-09T08:00:00Z")
+
+	tests := []struct {
+		name  string
+		event []string
+		id    string
+		patch EventPatch
+		want  string
+	}{
+		{"nothing to change", weekly, "20261109T090000Z", EventPatch{}, "nothing"},
+		{"not recurring", single, "20261102T090000Z", EventPatch{Summary: strPtr("x")}, "series"},
+		{"no such slot", weekly, "20261110T090000Z", EventPatch{Summary: strPtr("x")}, "occurrence"},
+		{"past the end of the series", weekly, "20261123T090000Z", EventPatch{Summary: strPtr("x")}, "occurrence"},
+		{"already removed", withExdate, "20261109T090000Z", EventPatch{Summary: strPtr("x")}, "occurrence"},
+		{"garbled id", weekly, "tomorrow", EventPatch{Summary: strPtr("x")}, "occurrence"},
+		{"empty id", weekly, "", EventPatch{Summary: strPtr("x")}, "occurrence"},
+		{"to all-day", weekly, "20261109T090000Z", EventPatch{Start: &first, End: &last, AllDay: true}, "all-day"},
+		{"end before start", weekly, "20261109T090000Z", EventPatch{End: &earlier}, "end"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := EditOccurrence([]byte(calendarOf(t, tt.event)), tt.id, tt.patch, time.UTC, fixedNow)
+
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("err = %v, want it to mention %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func deleteOccurrence(t *testing.T, data, id string) []byte {
+	t.Helper()
+	out, err := DeleteOccurrence([]byte(data), id, time.UTC, fixedNow)
+	if err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	return out
+}
+
+func TestDeleteOccurrenceAddsAnEXDATE(t *testing.T) {
+	raw := deleteOccurrence(t, calendarOf(t, weekly), "20261109T090000Z")
+
+	if !strings.Contains(string(raw), "EXDATE;TZID=Europe/Amsterdam:20261109T100000\r\n") {
+		t.Errorf("stored:\n%s", raw)
+	}
+	got := expandBytes(t, raw, "2026-11-01T00:00:00Z", "2026-12-01T00:00:00Z")
+	if want := "Weekly@1102T0900 Weekly@1116T0900"; summaries(got) != want {
+		t.Errorf("got %s, want %s", summaries(got), want)
+	}
+}
+
+func TestDeleteOccurrenceKeepsEarlierEXDATEs(t *testing.T) {
+	series := append(append([]string{}, weekly...), "EXDATE;TZID=Europe/Amsterdam:20261102T100000")
+
+	got := expandBytes(t, deleteOccurrence(t, calendarOf(t, series), "20261109T090000Z"), "2026-11-01T00:00:00Z", "2026-12-01T00:00:00Z")
+
+	if want := "Weekly@1116T0900"; summaries(got) != want {
+		t.Errorf("got %s, want %s", summaries(got), want)
+	}
+}
+
+func TestDeleteOccurrenceThatWasMoved(t *testing.T) {
+	override := []string{"RECURRENCE-ID;TZID=Europe/Amsterdam:20261109T100000", "DTSTART;TZID=Europe/Amsterdam:20261120T150000", "DTEND;TZID=Europe/Amsterdam:20261120T160000", "SUMMARY:Moved"}
+
+	raw := deleteOccurrence(t, calendarOf(t, weekly, override), "20261109T090000Z")
+
+	if strings.Contains(string(raw), "RECURRENCE-ID") {
+		t.Errorf("the override is still there:\n%s", raw)
+	}
+	got := expandBytes(t, raw, "2026-11-01T00:00:00Z", "2026-12-01T00:00:00Z")
+	if want := "Weekly@1102T0900 Weekly@1116T0900"; summaries(got) != want {
+		t.Errorf("got %s, want %s", summaries(got), want)
+	}
+}
+
+func TestDeleteOnlyOccurrenceLeavesNothingToStore(t *testing.T) {
+	orphan := []string{"RECURRENCE-ID:20261109T090000Z", "DTSTART:20261109T090000Z", "SUMMARY:Invited to this one"}
+
+	if raw := deleteOccurrence(t, calendarOf(t, orphan), "20261109T090000Z"); raw != nil {
+		t.Errorf("got %s, want nothing left", raw)
+	}
+}
+
+func TestDeleteOccurrenceRefusals(t *testing.T) {
+	single := []string{"DTSTART:20261102T090000Z", "SUMMARY:x"}
+
+	for name, tt := range map[string]struct {
+		event []string
+		id    string
+	}{
+		"not recurring": {single, "20261102T090000Z"},
+		"no such slot":  {weekly, "20261110T090000Z"},
+		"empty id":      {weekly, ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := DeleteOccurrence([]byte(calendarOf(t, tt.event)), tt.id, time.UTC, fixedNow); err == nil {
+				t.Error("delete passed")
+			}
+		})
+	}
+}

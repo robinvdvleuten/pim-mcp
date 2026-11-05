@@ -134,7 +134,7 @@ func TestDeleteEvent(t *testing.T) {
 	t.Run("current etag", func(t *testing.T) {
 		store := newStoreServer(t, storedSingle)
 
-		if _, err := store.client.DeleteEvent(t.Context(), "/cal/one.ics", "v1", ScopeSeries, ""); err != nil {
+		if _, err := store.client.DeleteEvent(t.Context(), "/cal/one.ics", "v1", ScopeSeries, "", time.UTC); err != nil {
 			t.Fatalf("delete: %v", err)
 		}
 
@@ -145,7 +145,7 @@ func TestDeleteEvent(t *testing.T) {
 	t.Run("stale etag", func(t *testing.T) {
 		store := newStoreServer(t, storedSingle)
 
-		_, err := store.client.DeleteEvent(t.Context(), "/cal/one.ics", "v0", ScopeSeries, "")
+		_, err := store.client.DeleteEvent(t.Context(), "/cal/one.ics", "v0", ScopeSeries, "", time.UTC)
 
 		if !errors.Is(err, ErrConflict) || store.data == "" {
 			t.Errorf("err = %v, stored %q", err, store.data)
@@ -154,11 +154,115 @@ func TestDeleteEvent(t *testing.T) {
 	t.Run("no etag", func(t *testing.T) {
 		store := newStoreServer(t, storedSingle)
 
-		if _, err := store.client.DeleteEvent(t.Context(), "/cal/one.ics", "", ScopeSeries, ""); err == nil {
+		if _, err := store.client.DeleteEvent(t.Context(), "/cal/one.ics", "", ScopeSeries, "", time.UTC); err == nil {
 			t.Error("delete without an etag passed")
 		}
 		if store.deletes != 0 {
 			t.Errorf("deletes = %d", store.deletes)
 		}
 	})
+}
+
+const storedWeekly = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//t//t//EN\r\nBEGIN:VEVENT\r\nUID:one\r\nDTSTAMP:20261001T120000Z\r\nDTSTART:20261102T090000Z\r\nDTEND:20261102T100000Z\r\nRRULE:FREQ=WEEKLY;COUNT=3\r\nSUMMARY:Old\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+
+func TestScopeAndOccurrenceIDMustAgree(t *testing.T) {
+	// An agent that means one occurrence must never get a whole series removed.
+	tests := []struct {
+		name         string
+		scope        string
+		occurrenceID string
+	}{
+		{"series with an occurrence id", ScopeSeries, "20261109T090000Z"},
+		{"occurrence without an id", ScopeOccurrence, ""},
+		{"unknown scope", "all", ""},
+		{"empty scope", "", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := newStoreServer(t, storedWeekly)
+
+			if _, err := store.client.DeleteEvent(t.Context(), "/cal/one.ics", "v1", tt.scope, tt.occurrenceID, time.UTC); err == nil {
+				t.Error("delete passed")
+			}
+			if _, err := store.client.UpdateEvent(t.Context(), "/cal/one.ics", "v1", tt.scope, tt.occurrenceID, newSummary("New"), time.UTC); err == nil {
+				t.Error("update passed")
+			}
+			if store.deletes != 0 || store.puts != 0 {
+				t.Errorf("deletes = %d, puts = %d", store.deletes, store.puts)
+			}
+		})
+	}
+}
+
+func TestUpdateOccurrence(t *testing.T) {
+	store := newStoreServer(t, storedWeekly)
+
+	got, err := store.client.UpdateEvent(t.Context(), "/cal/one.ics", "v1", ScopeOccurrence, "20261109T090000Z", newSummary("One"), time.UTC)
+	if err != nil {
+		t.Fatalf("update: %v", err)
+	}
+
+	if got.ETag != "v2" || !strings.Contains(store.data, "RECURRENCE-ID:20261109T090000Z") {
+		t.Errorf("got %+v, stored %s", got, store.data)
+	}
+	if store.headers.Get("If-Match") != `"v1"` {
+		t.Errorf("headers = %v", store.headers)
+	}
+}
+
+func TestDeleteOccurrenceKeepsTheRest(t *testing.T) {
+	store := newStoreServer(t, storedWeekly)
+
+	got, err := store.client.DeleteEvent(t.Context(), "/cal/one.ics", "v1", ScopeOccurrence, "20261109T090000Z", time.UTC)
+	if err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+
+	if got.ETag != "v2" || got.Deleted != ScopeOccurrence || store.deletes != 0 {
+		t.Errorf("got %+v, deletes %d", got, store.deletes)
+	}
+	if !strings.Contains(store.data, "EXDATE:20261109T090000Z") || !strings.Contains(store.data, "RRULE") {
+		t.Errorf("stored %s", store.data)
+	}
+}
+
+func TestDeleteOccurrenceWithStaleETag(t *testing.T) {
+	store := newStoreServer(t, storedWeekly)
+
+	_, err := store.client.DeleteEvent(t.Context(), "/cal/one.ics", "v0", ScopeOccurrence, "20261109T090000Z", time.UTC)
+
+	if !errors.Is(err, ErrConflict) || store.puts != 0 {
+		t.Errorf("err = %v, puts = %d", err, store.puts)
+	}
+}
+
+func TestDeleteLastOverrideRemovesTheObject(t *testing.T) {
+	store := newStoreServer(t, strings.Replace(storedSingle, "DTSTART:", "RECURRENCE-ID:20261110T090000Z\r\nDTSTART:", 1))
+
+	got, err := store.client.DeleteEvent(t.Context(), "/cal/one.ics", "v1", ScopeOccurrence, "20261110T090000Z", time.UTC)
+	if err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+
+	if store.deletes != 1 || store.data != "" || got.ETag != "" {
+		t.Errorf("deletes = %d, stored %q, got %+v", store.deletes, store.data, got)
+	}
+}
+
+func TestDeleteOccurrenceOfFloatingSeriesUsesTheUsersZone(t *testing.T) {
+	// The ids from a listing were worked out in the user's zone.
+	tokyo, err := time.LoadLocation("Asia/Tokyo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := newStoreServer(t, strings.NewReplacer("DTSTART:20261102T090000Z", "DTSTART:20261102T090000", "DTEND:20261102T100000Z", "DTEND:20261102T100000").Replace(storedWeekly))
+
+	if _, err := store.client.DeleteEvent(t.Context(), "/cal/one.ics", "v1", ScopeOccurrence, "20261109T000000Z", tokyo); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+
+	if !strings.Contains(store.data, "EXDATE:20261109T090000\r\n") {
+		t.Errorf("stored %s", store.data)
+	}
 }

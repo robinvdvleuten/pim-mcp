@@ -19,12 +19,20 @@ import (
 )
 
 const (
-	maxBodyBytes    = 64 * 1024
-	maxMessageBytes = 25 * 1024 * 1024
+	maxBodyBytes         = 64 * 1024
+	maxMessageBytes      = 25 * 1024 * 1024
+	maxCalendarPartBytes = 1024 * 1024
 )
 
-// ErrMessageTooLarge means a message or part is over the size the server reads.
-var ErrMessageTooLarge = errors.New("over the 25 MiB limit")
+// Errors callers can act on.
+var (
+	// ErrMessageTooLarge means a message or part is over the size the server reads.
+	ErrMessageTooLarge = errors.New("over the 25 MiB limit")
+	// ErrNoCalendarPart means a message holds no calendar invite.
+	ErrNoCalendarPart = errors.New("this message has no calendar part")
+	// ErrCalendarPartTooLarge means an invite is bigger than any real one.
+	ErrCalendarPartTooLarge = errors.New("the calendar part is over the 1 MiB limit")
+)
 
 // Part describes one leaf of a message's MIME structure.
 type Part struct {
@@ -118,6 +126,32 @@ func (c *Client) Read(ctx context.Context, id string) (*Content, error) {
 	content.BodyType = part.MediaType
 	content.Body, content.BodyTruncated = truncateBody(bodyText(raw, part.charset))
 	return content, nil
+}
+
+// CalendarPart returns a message's invite as UTF-8. If a message has several
+// calendar parts, such as the same invite as text and as an attachment, the
+// first is used, which RFC 6047 makes the one meant for reading.
+func (c *Client) CalendarPart(ctx context.Context, id string) ([]byte, error) {
+	message, err := c.Message(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	i := slices.IndexFunc(message.Parts, Part.isCalendar)
+	if i < 0 {
+		return nil, ErrNoCalendarPart
+	}
+	part := message.Parts[i]
+	if part.Size > maxCalendarPartBytes {
+		return nil, ErrCalendarPartTooLarge
+	}
+	raw, err := c.PartContent(ctx, id, part)
+	if err != nil {
+		return nil, err
+	}
+	if len(raw) > maxCalendarPartBytes {
+		return nil, ErrCalendarPartTooLarge
+	}
+	return []byte(bodyText(raw, part.charset)), nil
 }
 
 // PartContent returns the decoded bytes of a part from Message. Reading does

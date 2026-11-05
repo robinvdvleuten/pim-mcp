@@ -2,6 +2,7 @@ package calendar
 
 import (
 	"context"
+	"encoding/xml"
 	"errors"
 	"fmt"
 	"slices"
@@ -124,4 +125,36 @@ func (c *Client) queryEvents(ctx context.Context, calendarID string, start, end 
 		start.UTC().AddDate(0, 0, -1).Format(timeRangeFormat),
 		end.UTC().AddDate(0, 0, 1).Format(timeRangeFormat))
 	return c.multistatus(ctx, "REPORT", calendarID, "1", body)
+}
+
+// FindByUID returns the stored event with a UID, or nil if there is none. The UID
+// comes from an invite, so it's escaped for the query and compared again on the
+// way back, as a server's text-match need not be exact.
+func (c *Client) FindByUID(ctx context.Context, calendarID, uid string) (*Object, error) {
+	var escaped strings.Builder
+	if err := xml.EscapeText(&escaped, []byte(uid)); err != nil {
+		return nil, fmt.Errorf("escape UID: %w", err)
+	}
+	body := fmt.Sprintf(`<?xml version="1.0" encoding="utf-8"?><c:calendar-query xmlns:d="%s" xmlns:c="%s">
+<d:prop><d:getetag/><c:calendar-data/></d:prop>
+<c:filter><c:comp-filter name="VCALENDAR"><c:comp-filter name="VEVENT">
+<c:prop-filter name="UID"><c:text-match collation="i;octet">%s</c:text-match></c:prop-filter>
+</c:comp-filter></c:comp-filter></c:filter></c:calendar-query>`, nsDAV, nsCalDAV, escaped.String())
+	responses, err := c.multistatus(ctx, "REPORT", calendarID, "1", body)
+	if err != nil {
+		return nil, err
+	}
+	for _, response := range responses {
+		prop := response.prop()
+		cal, err := ical.Parse([]byte(prop.CalendarData))
+		if err != nil || !ical.HasUID(cal, uid) {
+			continue
+		}
+		eventID, err := c.hrefPath(response.Href)
+		if err != nil {
+			return nil, err
+		}
+		return &Object{Path: eventID, ETag: unquoteETag(prop.ETag), Data: []byte(prop.CalendarData)}, nil
+	}
+	return nil, nil
 }

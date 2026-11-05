@@ -63,6 +63,7 @@ func newServer(options Options) *Server {
 	}, s.accountInfo)
 	s.registerMail()
 	s.registerCalendar()
+	s.registerImport()
 	return s
 }
 

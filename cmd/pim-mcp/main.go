@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -12,11 +13,17 @@ import (
 	"syscall"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"golang.org/x/term"
 
+	"github.com/robinvdvleuten/pim-mcp/internal/account"
 	"github.com/robinvdvleuten/pim-mcp/internal/mcpserver"
 )
 
 const usage = `usage:
+  pim-mcp account add --email ADDRESS --imap HOST:PORT --caldav URL
+                      [--username NAME] [--imap-security tls|starttls|none]
+  pim-mcp account show
+  pim-mcp account remove
   pim-mcp serve      run the MCP server over stdio
   pim-mcp version    print the build revision
 `
@@ -28,31 +35,67 @@ func main() {
 	os.Exit(code)
 }
 
+// cli holds what commands reach for outside themselves, so tests can replace it.
+type cli struct {
+	stdout, stderr io.Writer
+	store          *account.Store
+	readPassword   func() (string, error)
+}
+
 func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
-	if len(args) != 1 {
-		_, _ = fmt.Fprint(stderr, usage)
+	c := &cli{stdout: stdout, stderr: stderr}
+	c.readPassword = c.promptPassword
+	// A missing home directory only matters to the commands that need it.
+	c.store, _ = account.DefaultStore()
+	return c.run(ctx, args)
+}
+
+func (c *cli) run(ctx context.Context, args []string) int {
+	if len(args) == 0 {
+		_, _ = fmt.Fprint(c.stderr, usage)
 		return 2
 	}
 
 	info, _ := debug.ReadBuildInfo()
 	version := versionString(info)
 
-	switch args[0] {
-	case "version":
-		if _, err := fmt.Fprintf(stdout, "pim-mcp %s\n", version); err != nil {
+	switch {
+	case args[0] == "account":
+		if c.store == nil {
+			return c.fail(errors.New("can't find the config directory, is HOME set?"))
+		}
+		return c.runAccount(args[1:])
+	case args[0] == "version" && len(args) == 1:
+		if _, err := fmt.Fprintf(c.stdout, "pim-mcp %s\n", version); err != nil {
 			return 1
 		}
 		return 0
-	case "serve":
-		if err := serve(ctx, version, stderr); err != nil {
-			_, _ = fmt.Fprintf(stderr, "pim-mcp: %v\n", err)
-			return 1
+	case args[0] == "serve" && len(args) == 1:
+		if err := serve(ctx, version, c.stderr); err != nil {
+			return c.fail(err)
 		}
 		return 0
 	default:
-		_, _ = fmt.Fprint(stderr, usage)
+		_, _ = fmt.Fprint(c.stderr, usage)
 		return 2
 	}
+}
+
+func (c *cli) fail(err error) int {
+	_, _ = fmt.Fprintf(c.stderr, "pim-mcp: %v\n", err)
+	return 1
+}
+
+// promptPassword reads from the terminal without echoing, and prompts on stderr
+// to leave stdout to the command's output.
+func (c *cli) promptPassword() (string, error) {
+	_, _ = fmt.Fprint(c.stderr, "Password: ")
+	password, err := term.ReadPassword(int(os.Stdin.Fd())) //nolint:gosec // File descriptors fit in an int.
+	_, _ = fmt.Fprintln(c.stderr)
+	if err != nil {
+		return "", err
+	}
+	return string(password), nil
 }
 
 // serve blocks until the client disconnects. Stdout belongs to the MCP

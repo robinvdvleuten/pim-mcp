@@ -16,10 +16,9 @@ import (
 
 	"github.com/emersion/go-imap/v2"
 	"github.com/emersion/go-imap/v2/imapclient"
-)
 
-// ErrInsecureTransport means plain IMAP was requested for a non-loopback host.
-var ErrInsecureTransport = errors.New("plain IMAP is only allowed on loopback")
+	"github.com/robinvdvleuten/pim-mcp/internal/transport"
+)
 
 // Security selects how the connection is protected. The zero value is TLS.
 type Security int
@@ -70,8 +69,8 @@ func Dial(ctx context.Context, cfg Config) (*Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse address: %w", err)
 	}
-	if cfg.Security == SecurityNone && !isLoopback(host) {
-		return nil, fmt.Errorf("connect to %s: %w", host, ErrInsecureTransport)
+	if cfg.Security == SecurityNone && !transport.IsLoopback(host) {
+		return nil, fmt.Errorf("connect to %s: %w", host, transport.ErrInsecure)
 	}
 	tlsConfig := &tls.Config{ServerName: host, MinVersion: tls.VersionTLS12}
 
@@ -238,14 +237,6 @@ func contextError(ctx context.Context, err error) error {
 		return ctxErr
 	}
 	return err
-}
-
-func isLoopback(host string) bool {
-	if host == "localhost" {
-		return true
-	}
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
 }
 
 func joinPath(path []int) string {

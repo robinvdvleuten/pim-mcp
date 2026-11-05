@@ -6,6 +6,8 @@ import (
 	"net"
 	"testing"
 	"time"
+
+	"github.com/robinvdvleuten/pim-mcp/internal/transport"
 )
 
 func TestDialRefusesPlainIMAPOffLoopback(t *testing.T) {
@@ -19,8 +21,8 @@ func TestDialRefusesPlainIMAPOffLoopback(t *testing.T) {
 		t.Run(addr, func(t *testing.T) {
 			_, err := Dial(t.Context(), Config{Addr: addr, Security: SecurityNone})
 
-			if !errors.Is(err, ErrInsecureTransport) {
-				t.Errorf("err = %v, want ErrInsecureTransport", err)
+			if !errors.Is(err, transport.ErrInsecure) {
+				t.Errorf("err = %v, want transport.ErrInsecure", err)
 			}
 		})
 	}

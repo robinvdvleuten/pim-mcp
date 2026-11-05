@@ -1,0 +1,14 @@
+version: "2"
+
+linters:
+  enable:
+    - errorlint
+    - gosec
+    - revive
+  exclusions:
+    rules:
+      # Tests build and launch the binary from a temp path they created.
+      - path: _test\.go
+        linters:
+          - gosec
+        text: G204

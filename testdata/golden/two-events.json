@@ -1,0 +1,30 @@
+[
+  {
+    "uid": "earlier@example.org",
+    "occurrence_id": "",
+    "summary": "Earlier",
+    "start": "2026-11-10T08:00:00Z",
+    "end": "2026-11-10T09:00:00Z",
+    "all_day": false,
+    "timezone": "UTC",
+    "location": "",
+    "description": "",
+    "recurring": false,
+    "status": "confirmed",
+    "organizer": ""
+  },
+  {
+    "uid": "later@example.org",
+    "occurrence_id": "",
+    "summary": "Later",
+    "start": "2026-11-10T15:00:00Z",
+    "end": "2026-11-10T16:00:00Z",
+    "all_day": false,
+    "timezone": "UTC",
+    "location": "",
+    "description": "",
+    "recurring": false,
+    "status": "confirmed",
+    "organizer": ""
+  }
+]

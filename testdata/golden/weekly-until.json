@@ -1,0 +1,58 @@
+[
+  {
+    "uid": "weekly@example.org",
+    "occurrence_id": "20261109T140000Z",
+    "summary": "Review",
+    "start": "2026-11-09T14:00:00Z",
+    "end": "2026-11-09T15:00:00Z",
+    "all_day": false,
+    "timezone": "UTC",
+    "location": "",
+    "description": "",
+    "recurring": true,
+    "status": "confirmed",
+    "organizer": ""
+  },
+  {
+    "uid": "weekly@example.org",
+    "occurrence_id": "20261111T140000Z",
+    "summary": "Review",
+    "start": "2026-11-11T14:00:00Z",
+    "end": "2026-11-11T15:00:00Z",
+    "all_day": false,
+    "timezone": "UTC",
+    "location": "",
+    "description": "",
+    "recurring": true,
+    "status": "confirmed",
+    "organizer": ""
+  },
+  {
+    "uid": "weekly@example.org",
+    "occurrence_id": "20261116T140000Z",
+    "summary": "Review",
+    "start": "2026-11-16T14:00:00Z",
+    "end": "2026-11-16T15:00:00Z",
+    "all_day": false,
+    "timezone": "UTC",
+    "location": "",
+    "description": "",
+    "recurring": true,
+    "status": "confirmed",
+    "organizer": ""
+  },
+  {
+    "uid": "weekly@example.org",
+    "occurrence_id": "20261118T140000Z",
+    "summary": "Review",
+    "start": "2026-11-18T14:00:00Z",
+    "end": "2026-11-18T15:00:00Z",
+    "all_day": false,
+    "timezone": "UTC",
+    "location": "",
+    "description": "",
+    "recurring": true,
+    "status": "confirmed",
+    "organizer": ""
+  }
+]

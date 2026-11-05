@@ -1,0 +1,44 @@
+[
+  {
+    "uid": "monthly@example.org",
+    "occurrence_id": "20261231T080000Z",
+    "summary": "Month end",
+    "start": "2026-12-31T08:00:00Z",
+    "end": "2026-12-31T08:30:00Z",
+    "all_day": false,
+    "timezone": "UTC",
+    "location": "",
+    "description": "",
+    "recurring": true,
+    "status": "confirmed",
+    "organizer": ""
+  },
+  {
+    "uid": "monthly@example.org",
+    "occurrence_id": "20270131T080000Z",
+    "summary": "Month end",
+    "start": "2027-01-31T08:00:00Z",
+    "end": "2027-01-31T08:30:00Z",
+    "all_day": false,
+    "timezone": "UTC",
+    "location": "",
+    "description": "",
+    "recurring": true,
+    "status": "confirmed",
+    "organizer": ""
+  },
+  {
+    "uid": "monthly@example.org",
+    "occurrence_id": "20270331T080000Z",
+    "summary": "Month end",
+    "start": "2027-03-31T08:00:00Z",
+    "end": "2027-03-31T08:30:00Z",
+    "all_day": false,
+    "timezone": "UTC",
+    "location": "",
+    "description": "",
+    "recurring": true,
+    "status": "confirmed",
+    "organizer": ""
+  }
+]

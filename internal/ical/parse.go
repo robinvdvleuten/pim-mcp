@@ -1,0 +1,74 @@
+// Package ical turns iCalendar data into plain occurrences, so nothing above
+// it has to deal with recurrence rules or the iCalendar format. It does no I/O.
+package ical
+
+import (
+	"bytes"
+	"fmt"
+	"strings"
+	"time"
+
+	goical "github.com/emersion/go-ical"
+)
+
+// Occurrence is one concrete instance of an event.
+type Occurrence struct {
+	UID string `json:"uid"`
+	// OccurrenceID identifies an instance of a recurring event. It is empty for
+	// events that don't repeat.
+	OccurrenceID string    `json:"occurrence_id"`
+	Summary      string    `json:"summary"`
+	Start        time.Time `json:"start"`
+	End          time.Time `json:"end"`
+	AllDay       bool      `json:"all_day"`
+	Timezone     string    `json:"timezone"`
+	Location     string    `json:"location"`
+	Description  string    `json:"description"`
+	Recurring    bool      `json:"recurring"`
+	Status       string    `json:"status"`
+	Organizer    string    `json:"organizer"`
+}
+
+// Parse decodes a single iCalendar object.
+func Parse(data []byte) (*goical.Calendar, error) {
+	cal, err := goical.NewDecoder(bytes.NewReader(data)).Decode()
+	if err != nil {
+		return nil, fmt.Errorf("parse iCalendar: %w", err)
+	}
+	return cal, nil
+}
+
+// eventTemplate holds what all occurrences of an event have in common.
+func eventTemplate(event *goical.Event) (Occurrence, error) {
+	occurrence := Occurrence{
+		Status:    "confirmed",
+		Organizer: organizer(event),
+	}
+	for name, field := range map[string]*string{
+		goical.PropUID:         &occurrence.UID,
+		goical.PropSummary:     &occurrence.Summary,
+		goical.PropLocation:    &occurrence.Location,
+		goical.PropDescription: &occurrence.Description,
+	} {
+		value, err := event.Props.Text(name)
+		if err != nil {
+			return Occurrence{}, fmt.Errorf("read %s: %w", name, err)
+		}
+		*field = value
+	}
+	if prop := event.Props.Get(goical.PropStatus); prop != nil {
+		occurrence.Status = strings.ToLower(prop.Value)
+	}
+	return occurrence, nil
+}
+
+func organizer(event *goical.Event) string {
+	prop := event.Props.Get(goical.PropOrganizer)
+	if prop == nil {
+		return ""
+	}
+	if len(prop.Value) >= len("mailto:") && strings.EqualFold(prop.Value[:len("mailto:")], "mailto:") {
+		return prop.Value[len("mailto:"):]
+	}
+	return prop.Value
+}

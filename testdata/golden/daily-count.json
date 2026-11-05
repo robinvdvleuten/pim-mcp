@@ -1,0 +1,44 @@
+[
+  {
+    "uid": "daily@example.org",
+    "occurrence_id": "20261110T090000Z",
+    "summary": "Standup",
+    "start": "2026-11-10T09:00:00Z",
+    "end": "2026-11-10T09:30:00Z",
+    "all_day": false,
+    "timezone": "UTC",
+    "location": "",
+    "description": "",
+    "recurring": true,
+    "status": "confirmed",
+    "organizer": ""
+  },
+  {
+    "uid": "daily@example.org",
+    "occurrence_id": "20261111T090000Z",
+    "summary": "Standup",
+    "start": "2026-11-11T09:00:00Z",
+    "end": "2026-11-11T09:30:00Z",
+    "all_day": false,
+    "timezone": "UTC",
+    "location": "",
+    "description": "",
+    "recurring": true,
+    "status": "confirmed",
+    "organizer": ""
+  },
+  {
+    "uid": "daily@example.org",
+    "occurrence_id": "20261112T090000Z",
+    "summary": "Standup",
+    "start": "2026-11-12T09:00:00Z",
+    "end": "2026-11-12T09:30:00Z",
+    "all_day": false,
+    "timezone": "UTC",
+    "location": "",
+    "description": "",
+    "recurring": true,
+    "status": "confirmed",
+    "organizer": ""
+  }
+]

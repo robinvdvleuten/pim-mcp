@@ -1,0 +1,16 @@
+[
+  {
+    "uid": "endless@example.org",
+    "occurrence_id": "20261109T230000Z",
+    "summary": "Night shift",
+    "start": "2026-11-09T23:00:00Z",
+    "end": "2026-11-10T01:00:00Z",
+    "all_day": false,
+    "timezone": "UTC",
+    "location": "",
+    "description": "",
+    "recurring": true,
+    "status": "confirmed",
+    "organizer": ""
+  }
+]

@@ -1,6 +1,8 @@
 module github.com/robinvdvleuten/pim-mcp
 
-go 1.27.3
+go 1.26.0
+
+toolchain go1.27.3
 
 require (
 	github.com/emersion/go-ical v0.0.0-20250609112844-439c63cef608

@@ -26,25 +26,41 @@ func TestExpandGolden(t *testing.T) {
 		fixture string
 		start   string
 		end     string
+		golden  string // defaults to fixture
 	}{
-		{"single-event", "2026-11-10T00:00:00Z", "2026-11-11T00:00:00Z"},
-		{"daily-count", "2026-11-01T00:00:00Z", "2026-12-01T00:00:00Z"},
-		{"weekly-until", "2026-11-01T00:00:00Z", "2026-12-01T00:00:00Z"},
+		{fixture: "single-event", start: "2026-11-10T00:00:00Z", end: "2026-11-11T00:00:00Z"},
+		{fixture: "daily-count", start: "2026-11-01T00:00:00Z", end: "2026-12-01T00:00:00Z"},
+		{fixture: "weekly-until", start: "2026-11-01T00:00:00Z", end: "2026-12-01T00:00:00Z"},
 		// February and April have no 31st, so both are skipped.
-		{"monthly-day-31", "2026-12-01T00:00:00Z", "2027-05-01T00:00:00Z"},
+		{fixture: "monthly-day-31", start: "2026-12-01T00:00:00Z", end: "2027-05-01T00:00:00Z"},
 		// Started six years ago. The range opens during an occurrence, and
 		// the next one starts exactly when the range closes.
-		{"endless-weekly", "2026-11-10T00:00:00Z", "2026-11-16T23:00:00Z"},
-		{"two-events", "2026-11-10T00:00:00Z", "2026-11-11T00:00:00Z"},
+		{fixture: "endless-weekly", start: "2026-11-10T00:00:00Z", end: "2026-11-16T23:00:00Z"},
+		{fixture: "two-events", start: "2026-11-10T00:00:00Z", end: "2026-11-11T00:00:00Z"},
+		{fixture: "exdate", start: "2026-11-01T00:00:00Z", end: "2026-12-01T00:00:00Z"},
+		{fixture: "override", start: "2026-11-01T00:00:00Z", end: "2027-01-01T00:00:00Z"},
+		// The moved occurrence's original slot is in range, its new one isn't.
+		{fixture: "override", start: "2026-11-16T00:00:00Z", end: "2026-11-17T00:00:00Z", golden: "override-moved-out"},
+		// The other way round: only the new slot is in range.
+		{fixture: "override", start: "2026-12-01T00:00:00Z", end: "2026-12-02T00:00:00Z", golden: "override-moved-in"},
+		{fixture: "override-cancelled", start: "2026-11-01T00:00:00Z", end: "2026-12-01T00:00:00Z"},
+		{fixture: "override-orphan", start: "2026-11-01T00:00:00Z", end: "2026-12-01T00:00:00Z"},
+		{fixture: "rdate", start: "2026-11-01T00:00:00Z", end: "2026-12-01T00:00:00Z"},
+		{fixture: "rdate-only", start: "2026-11-01T00:00:00Z", end: "2026-12-01T00:00:00Z"},
+		{fixture: "two-series", start: "2026-11-01T00:00:00Z", end: "2026-12-01T00:00:00Z"},
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.fixture, func(t *testing.T) {
+		goldenName := tt.golden
+		if goldenName == "" {
+			goldenName = tt.fixture
+		}
+		t.Run(goldenName, func(t *testing.T) {
 			data, err := os.ReadFile(filepath.Join("..", "..", "testdata", "ics", tt.fixture+".ics"))
 			if err != nil {
 				t.Fatal(err)
 			}
-			want, err := os.ReadFile(filepath.Join("..", "..", "testdata", "golden", tt.fixture+".json"))
+			want, err := os.ReadFile(filepath.Join("..", "..", "testdata", "golden", goldenName+".json"))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -161,6 +177,11 @@ func TestExpandRejectsBadEvents(t *testing.T) {
 		{"bad rule", []string{"DTSTART:20261110T090000Z", "RRULE:FREQ=NEVER"}, "test@example.org"},
 		{"impossible rule value", []string{"DTSTART:20261110T090000Z", "RRULE:FREQ=DAILY;BYHOUR=99"}, "test@example.org"},
 		{"end before start", []string{"DTSTART:20261110T090000Z", "DTEND:20261110T080000Z"}, "test@example.org"},
+		{"bad EXDATE", []string{"DTSTART:20261110T090000Z", "RRULE:FREQ=DAILY", "EXDATE:tomorrow"}, "EXDATE"},
+		{"bad RDATE", []string{"DTSTART:20261110T090000Z", "RDATE:tomorrow"}, "RDATE"},
+		{"RDATE period", []string{"DTSTART:20261110T090000Z", "RDATE;VALUE=PERIOD:20261111T090000Z/PT1H"}, "PERIOD"},
+		{"bad RECURRENCE-ID", []string{"DTSTART:20261110T090000Z", "RECURRENCE-ID:tomorrow"}, "RECURRENCE-ID"},
+		{"override of all later instances", []string{"DTSTART:20261110T090000Z", "RECURRENCE-ID;RANGE=THISANDFUTURE:20261110T090000Z"}, "THISANDFUTURE"},
 	}
 
 	for _, tt := range tests {
@@ -187,6 +208,33 @@ func TestParseRejectsGarbage(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			if _, err := Parse([]byte(data)); err == nil {
 				t.Error("parse succeeded")
+			}
+		})
+	}
+}
+
+func TestExpandKeepsWholeTextValues(t *testing.T) {
+	tests := map[string]struct{ value, want string }{
+		"unescaped comma":  {`Lunch, then coffee`, "Lunch, then coffee"},
+		"escaped comma":    {`Lunch\, then coffee`, "Lunch, then coffee"},
+		"escaped others":   {`a\;b\\c\nd\Ne`, "a;b\\c\nd\ne"},
+		"backslash then n": {`a\\nb`, `a\nb`},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			cal, err := Parse([]byte(parseEvent(t, "DTSTART:20261110T090000Z", "SUMMARY:"+tt.value)))
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+
+			got, err := Expand(cal, date(t, "2026-11-10T00:00:00Z"), date(t, "2026-11-11T00:00:00Z"))
+			if err != nil {
+				t.Fatalf("expand: %v", err)
+			}
+
+			if len(got) != 1 || got[0].Summary != tt.want {
+				t.Errorf("got %+v, want summary %q", got, tt.want)
 			}
 		})
 	}

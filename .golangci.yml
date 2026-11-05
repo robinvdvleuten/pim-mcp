@@ -7,8 +7,8 @@ linters:
     - revive
   exclusions:
     rules:
-      # Tests build and launch the binary from a temp path they created.
+      # Tests launch the binary they built and read their own fixtures.
       - path: _test\.go
         linters:
           - gosec
-        text: G204
+        text: G204|G304

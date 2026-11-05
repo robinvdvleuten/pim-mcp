@@ -1,0 +1,44 @@
+[
+  {
+    "uid": "series@example.org",
+    "occurrence_id": "20261109T100000Z",
+    "summary": "Weekly, new room",
+    "start": "2026-11-09T10:00:00Z",
+    "end": "2026-11-09T11:00:00Z",
+    "all_day": false,
+    "timezone": "UTC",
+    "location": "Room 9",
+    "description": "",
+    "recurring": true,
+    "status": "confirmed",
+    "organizer": ""
+  },
+  {
+    "uid": "series@example.org",
+    "occurrence_id": "20261123T100000Z",
+    "summary": "Weekly",
+    "start": "2026-11-23T10:00:00Z",
+    "end": "2026-11-23T11:00:00Z",
+    "all_day": false,
+    "timezone": "UTC",
+    "location": "",
+    "description": "",
+    "recurring": true,
+    "status": "confirmed",
+    "organizer": ""
+  },
+  {
+    "uid": "series@example.org",
+    "occurrence_id": "20261116T100000Z",
+    "summary": "Weekly, moved",
+    "start": "2026-12-01T15:00:00Z",
+    "end": "2026-12-01T15:30:00Z",
+    "all_day": false,
+    "timezone": "UTC",
+    "location": "",
+    "description": "",
+    "recurring": true,
+    "status": "confirmed",
+    "organizer": ""
+  }
+]

@@ -39,7 +39,7 @@ func Parse(data []byte) (*goical.Calendar, error) {
 }
 
 // eventTemplate holds what all occurrences of an event have in common.
-func eventTemplate(event *goical.Event) (Occurrence, error) {
+func eventTemplate(event *goical.Event) Occurrence {
 	occurrence := Occurrence{
 		Status:    "confirmed",
 		Organizer: organizer(event),
@@ -50,17 +50,26 @@ func eventTemplate(event *goical.Event) (Occurrence, error) {
 		goical.PropLocation:    &occurrence.Location,
 		goical.PropDescription: &occurrence.Description,
 	} {
-		value, err := event.Props.Text(name)
-		if err != nil {
-			return Occurrence{}, fmt.Errorf("read %s: %w", name, err)
-		}
-		*field = value
+		*field = text(event, name)
 	}
 	if prop := event.Props.Get(goical.PropStatus); prop != nil {
 		occurrence.Status = strings.ToLower(prop.Value)
 	}
-	return occurrence, nil
+	return occurrence
 }
+
+// text reads a text property. go-ical's own reader treats the value as a list
+// and returns what comes before the first unescaped comma, but mail clients do
+// write unescaped commas, which would silently cut off a summary.
+func text(event *goical.Event, name string) string {
+	prop := event.Props.Get(name)
+	if prop == nil {
+		return ""
+	}
+	return textUnescaper.Replace(prop.Value)
+}
+
+var textUnescaper = strings.NewReplacer(`\\`, `\`, `\n`, "\n", `\N`, "\n", `\,`, ",", `\;`, ";")
 
 func organizer(event *goical.Event) string {
 	prop := event.Props.Get(goical.PropOrganizer)

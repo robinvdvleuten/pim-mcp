@@ -1,0 +1,16 @@
+[
+  {
+    "uid": "cancel@example.org",
+    "occurrence_id": "20261110T100000Z",
+    "summary": "Daily",
+    "start": "2026-11-10T10:00:00Z",
+    "end": "2026-11-10T11:00:00Z",
+    "all_day": false,
+    "timezone": "UTC",
+    "location": "",
+    "description": "",
+    "recurring": true,
+    "status": "confirmed",
+    "organizer": ""
+  }
+]

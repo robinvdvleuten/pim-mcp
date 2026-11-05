@@ -1,0 +1,30 @@
+[
+  {
+    "uid": "ro@example.org",
+    "occurrence_id": "20261109T100000Z",
+    "summary": "Twice",
+    "start": "2026-11-09T10:00:00Z",
+    "end": "2026-11-09T11:00:00Z",
+    "all_day": false,
+    "timezone": "UTC",
+    "location": "",
+    "description": "",
+    "recurring": true,
+    "status": "confirmed",
+    "organizer": ""
+  },
+  {
+    "uid": "ro@example.org",
+    "occurrence_id": "20261120T100000Z",
+    "summary": "Twice",
+    "start": "2026-11-20T10:00:00Z",
+    "end": "2026-11-20T11:00:00Z",
+    "all_day": false,
+    "timezone": "UTC",
+    "location": "",
+    "description": "",
+    "recurring": true,
+    "status": "confirmed",
+    "organizer": ""
+  }
+]

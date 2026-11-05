@@ -83,7 +83,7 @@ func newUID(t *testing.T) string {
 
 func preview(t *testing.T, session *mcp.ClientSession, calendarID string) importer.Result {
 	t.Helper()
-	return callTool[importer.Result](t, session, "calendar_import_from_email", map[string]any{
+	return callTool[importer.Result](t, session, "calendar_preview_import", map[string]any{
 		"message_id": firstMessageID(t, session), "calendar_id": calendarID,
 	})
 }
@@ -222,7 +222,7 @@ func TestImportRefusals(t *testing.T) {
 			seed(t, user, tt.message)
 			session := importSession(t, user, s)
 
-			result, err := session.CallTool(t.Context(), &mcp.CallToolParams{Name: "calendar_import_from_email", Arguments: map[string]any{
+			result, err := session.CallTool(t.Context(), &mcp.CallToolParams{Name: "calendar_preview_import", Arguments: map[string]any{
 				"message_id": firstMessageID(t, session), "calendar_id": s.calendar,
 			}})
 			if err != nil {
@@ -239,7 +239,7 @@ func TestImportRefusals(t *testing.T) {
 func confirmImport(t *testing.T, session *mcp.ClientSession, calendarID string) importer.Result {
 	t.Helper()
 	return callTool[importer.Result](t, session, "calendar_import_from_email", map[string]any{
-		"message_id": firstMessageID(t, session), "calendar_id": calendarID, "confirm": true,
+		"message_id": firstMessageID(t, session), "calendar_id": calendarID,
 	})
 }
 
@@ -523,15 +523,15 @@ func TestImportNeedsACalendar(t *testing.T) {
 	seed(t, user, inviteMail("REQUEST", vevent(newUID(t), "DTSTART:20340110T090000Z", "SUMMARY:x")))
 	session := importSession(t, user, caldavServers[1])
 
-	for _, confirm := range []bool{false, true} {
-		result, err := session.CallTool(t.Context(), &mcp.CallToolParams{Name: "calendar_import_from_email", Arguments: map[string]any{
-			"message_id": firstMessageID(t, session), "calendar_id": "", "confirm": confirm,
+	for _, tool := range []string{"calendar_preview_import", "calendar_import_from_email"} {
+		result, err := session.CallTool(t.Context(), &mcp.CallToolParams{Name: tool, Arguments: map[string]any{
+			"message_id": firstMessageID(t, session), "calendar_id": "",
 		}})
 		if err != nil {
 			t.Fatal(err)
 		}
 		if !result.IsError {
-			t.Errorf("confirm %v: call succeeded: %s", confirm, toolText(result))
+			t.Errorf("%s: call succeeded: %s", tool, toolText(result))
 		}
 	}
 }

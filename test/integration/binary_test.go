@@ -120,11 +120,10 @@ func TestCoreStoryThroughTheRealBinary(t *testing.T) {
 	}
 	args := map[string]any{"message_id": found.Messages[0].ID, "calendar_id": s.calendar}
 
-	previewed := callTool[importer.Result](t, session, "calendar_import_from_email", args)
+	previewed := callTool[importer.Result](t, session, "calendar_preview_import", args)
 	if previewed.Written || previewed.Events[0].Action != importer.ActionCreate {
 		t.Fatalf("preview = %+v", previewed)
 	}
-	args["confirm"] = true
 	imported := callTool[importer.Result](t, session, "calendar_import_from_email", args)
 	if !imported.Written {
 		t.Fatalf("import = %+v", imported)
@@ -169,8 +168,44 @@ func TestReadOnlyBinaryCannotWrite(t *testing.T) {
 		names = append(names, tool.Name)
 	}
 	slices.Sort(names)
-	want := []string{"account_info", "calendar_free_busy", "calendar_list_calendars", "calendar_list_events", "mail_get", "mail_list_folders", "mail_search"}
+	want := []string{"account_info", "calendar_free_busy", "calendar_list_calendars", "calendar_list_events", "calendar_preview_import", "mail_get", "mail_list_folders", "mail_search"}
 	if !slices.Equal(names, want) {
 		t.Errorf("tools = %v, want %v", names, want)
+	}
+}
+
+// Read-only mode exists so nothing can change, while a preview still has to work,
+// as it's how someone decides whether to allow the write.
+func TestReadOnlyBinaryCanPreviewAnImport(t *testing.T) {
+	s := caldavServers[0]
+	createRadicaleCalendar(t, s)
+	uid := newUID(t)
+	subject := "Preview " + uid
+	seed(t, caldavUser, strings.Replace(inviteMail("REQUEST", vevent(uid, "DTSTART:20360115T090000Z", "DTEND:20360115T100000Z", "SUMMARY:Read only")), "Subject: An invite", "Subject: "+subject, 1))
+	session := serveBinary(t, s, caldavUser, "--read-only")
+	found := callTool[mcpserver.SearchResult](t, session, "mail_search", map[string]any{"subject": subject})
+	if len(found.Messages) != 1 {
+		t.Fatalf("messages = %+v", found.Messages)
+	}
+
+	got := callTool[importer.Result](t, session, "calendar_preview_import", map[string]any{
+		"message_id": found.Messages[0].ID, "calendar_id": s.calendar,
+	})
+
+	if got.Written || len(got.Events) != 1 || got.Events[0].Action != importer.ActionCreate {
+		t.Errorf("preview = %+v", got)
+	}
+	c, err := calendar.New(calendar.Config{URL: s.url, Username: caldavUser, Password: caldavPassword})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if events := eventsNamed(t, c, s, uid, time.Date(2036, 1, 15, 0, 0, 0, 0, time.UTC)); len(events) != 0 {
+		t.Errorf("a preview wrote %+v", events)
+	}
+	result, err := session.CallTool(t.Context(), &mcp.CallToolParams{Name: "calendar_import_from_email", Arguments: map[string]any{
+		"message_id": found.Messages[0].ID, "calendar_id": s.calendar,
+	}})
+	if err == nil && !result.IsError {
+		t.Error("the import went through in read-only mode")
 	}
 }

@@ -229,3 +229,16 @@ func TestServeWithoutAccountTellsTheAgentWhatToDo(t *testing.T) {
 		t.Errorf("error = %v, output = %s", isError, output)
 	}
 }
+
+func TestServeRefusesUnknownToolNames(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+
+	code := run(context.Background(), []string{"serve", "--tools", "mail_serach"}, &stdout, &stderr)
+
+	if code != 1 {
+		t.Errorf("exit code = %d, want 1", code)
+	}
+	if !strings.Contains(stderr.String(), "mail_serach") || !strings.Contains(stderr.String(), "mail_search") {
+		t.Errorf("stderr = %q", stderr.String())
+	}
+}

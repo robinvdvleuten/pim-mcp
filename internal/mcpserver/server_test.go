@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -224,6 +226,168 @@ func TestCalendarListEventsRefusesBadInputWithoutConnecting(t *testing.T) {
 			}
 			if requests != 0 {
 				t.Errorf("sent %d requests", requests)
+			}
+		})
+	}
+}
+
+func toolNames(t *testing.T, options Options) []string {
+	t.Helper()
+	session := connect(t, New(options))
+	result, err := session.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("list tools: %v", err)
+	}
+	names := []string{}
+	for _, tool := range result.Tools {
+		names = append(names, tool.Name)
+	}
+	slices.Sort(names)
+	return names
+}
+
+func TestReadOnlyModeHidesEveryWriteTool(t *testing.T) {
+	session := connect(t, New(Options{Version: "test", ReadOnly: true}))
+
+	result, err := session.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("list tools: %v", err)
+	}
+
+	for _, tool := range result.Tools {
+		if tool.Annotations == nil || !tool.Annotations.ReadOnlyHint {
+			t.Errorf("%s is available in read-only mode", tool.Name)
+		}
+	}
+	if len(result.Tools) == 0 {
+		t.Error("no tools at all")
+	}
+}
+
+func TestReadOnlyModeRefusesAWriteToolCalledAnyway(t *testing.T) {
+	session := connect(t, New(Options{Version: "test", ReadOnly: true}))
+
+	_, err := session.CallTool(context.Background(), &mcp.CallToolParams{Name: "calendar_create_event", Arguments: map[string]any{
+		"calendar_id": "/cal/", "summary": "x", "start": "2026-11-10T09:00:00Z", "end": "2026-11-10T10:00:00Z",
+	}})
+
+	if err == nil {
+		t.Error("the call reached a tool")
+	}
+}
+
+func TestWriteToolsExistWithoutReadOnlyMode(t *testing.T) {
+	if names := toolNames(t, Options{Version: "test"}); !slices.Contains(names, "calendar_create_event") {
+		t.Errorf("tools = %v", names)
+	}
+}
+
+func TestToolsOptionNarrowsTheSet(t *testing.T) {
+	got := toolNames(t, Options{Version: "test", Tools: []string{"mail_search", "calendar_create_event"}})
+	if !slices.Equal(got, []string{"calendar_create_event", "mail_search"}) {
+		t.Errorf("tools = %v", got)
+	}
+
+	got = toolNames(t, Options{Version: "test", ReadOnly: true, Tools: []string{"mail_search", "calendar_create_event"}})
+	if !slices.Equal(got, []string{"mail_search"}) {
+		t.Errorf("read-only tools = %v, read-only must win", got)
+	}
+}
+
+func TestKnownTools(t *testing.T) {
+	known := KnownTools()
+
+	for _, want := range []string{"account_info", "mail_get", "calendar_list_events", "calendar_create_event"} {
+		if !slices.Contains(known, want) {
+			t.Errorf("known = %v, want %s", known, want)
+		}
+	}
+}
+
+func TestCreateEventInputs(t *testing.T) {
+	timed := map[string]any{"calendar_id": "/cal/", "summary": "x", "start": "2026-11-10T09:00:00Z", "end": "2026-11-10T10:00:00Z"}
+	with := func(changes map[string]any) map[string]any {
+		out := map[string]any{}
+		for k, v := range timed {
+			out[k] = v
+		}
+		for k, v := range changes {
+			if v == nil {
+				delete(out, k)
+			} else {
+				out[k] = v
+			}
+		}
+		return out
+	}
+	tests := []struct {
+		name   string
+		args   map[string]any
+		start  string
+		allDay bool
+		bad    bool
+	}{
+		{name: "RFC 3339", args: timed, start: "2026-11-10T09:00:00Z"},
+		{name: "local time and a zone", args: with(map[string]any{"start": "2026-11-10T09:00:00", "end": "2026-11-10T10:00:00", "timezone": "Europe/Amsterdam"}), start: "2026-11-10T08:00:00Z"},
+		{name: "local time without seconds", args: with(map[string]any{"start": "2026-11-10T09:00", "end": "2026-11-10T10:00", "timezone": "Europe/Amsterdam"}), start: "2026-11-10T08:00:00Z"},
+		{name: "one all-day date", args: with(map[string]any{"start": nil, "end": nil, "date": "2026-11-10"}), start: "2026-11-10T00:00:00Z", allDay: true},
+		{name: "several days", args: with(map[string]any{"start": nil, "end": nil, "date": "2026-11-10", "end_date": "2026-11-12"}), start: "2026-11-10T00:00:00Z", allDay: true},
+		{name: "local time without a zone", args: with(map[string]any{"start": "2026-11-10T09:00:00"}), bad: true},
+		{name: "unknown zone", args: with(map[string]any{"start": "2026-11-10T09:00:00", "end": "2026-11-10T10:00:00", "timezone": "Mars/Olympus"}), bad: true},
+		{name: "no end", args: with(map[string]any{"end": nil}), bad: true},
+		{name: "date and times", args: with(map[string]any{"date": "2026-11-10"}), bad: true},
+		{name: "neither", args: with(map[string]any{"start": nil, "end": nil}), bad: true},
+		{name: "bad date", args: with(map[string]any{"start": nil, "end": nil, "date": "soon"}), bad: true},
+		{name: "last day before the first", args: with(map[string]any{"start": nil, "end": nil, "date": "2026-11-10", "end_date": "2026-11-09"}), bad: true},
+		{name: "end date without a date", args: with(map[string]any{"end_date": "2026-11-12"}), bad: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var body string
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				data, _ := io.ReadAll(r.Body)
+				body = string(data)
+				w.Header().Set("ETag", `"e"`)
+				w.WriteHeader(http.StatusCreated)
+			}))
+			t.Cleanup(server.Close)
+			session := connect(t, New(Options{Version: "test", Zone: time.UTC, DialCalendar: func() (*calendar.Client, error) {
+				return calendar.New(calendar.Config{URL: server.URL})
+			}}))
+
+			var got calendar.Event
+			result, err := session.CallTool(context.Background(), &mcp.CallToolParams{Name: "calendar_create_event", Arguments: tt.args})
+			if err != nil {
+				if !tt.bad {
+					t.Fatalf("call: %v", err)
+				}
+				return
+			}
+			if tt.bad {
+				if !result.IsError {
+					t.Errorf("call succeeded: %s", errorText(result))
+				}
+				if body != "" {
+					t.Errorf("wrote %q", body)
+				}
+				return
+			}
+			if result.IsError {
+				t.Fatalf("tool error: %s", errorText(result))
+			}
+			data, err := json.Marshal(result.StructuredContent)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := json.Unmarshal(data, &got); err != nil {
+				t.Fatal(err)
+			}
+			if got.Start.UTC().Format(time.RFC3339) != tt.start || got.AllDay != tt.allDay {
+				t.Errorf("event = %+v, want start %s", got, tt.start)
+			}
+			if got.ETag != "e" || got.CalendarID != "/cal/" || !strings.HasPrefix(got.EventID, "/cal/") {
+				t.Errorf("event = %+v", got)
 			}
 		})
 	}

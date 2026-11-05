@@ -208,3 +208,32 @@ func TestEventsUnknownCalendarIsAnError(t *testing.T) {
 		t.Errorf("err = %v", err)
 	}
 }
+
+func TestCreateEventRefusesBadFieldsWithoutWriting(t *testing.T) {
+	tests := map[string]ical.EventFields{
+		"no summary":  {Start: rangeStart, End: rangeEnd},
+		"blank":       {Summary: "  ", Start: rangeStart, End: rangeEnd},
+		"end first":   {Summary: "x", Start: rangeEnd, End: rangeStart},
+		"no length":   {Summary: "x", Start: rangeStart, End: rangeStart},
+		"over a year": {Summary: "x", Start: rangeStart, End: rangeStart.AddDate(2, 0, 0)},
+	}
+
+	for name, fields := range tests {
+		t.Run(name, func(t *testing.T) {
+			var requests int
+			server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { requests++ }))
+			t.Cleanup(server.Close)
+			client, err := New(Config{URL: server.URL})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if _, err := client.CreateEvent(t.Context(), "/cal/", fields, time.UTC); err == nil {
+				t.Error("create succeeded")
+			}
+			if requests != 0 {
+				t.Errorf("sent %d requests", requests)
+			}
+		})
+	}
+}

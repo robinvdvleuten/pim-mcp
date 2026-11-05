@@ -38,19 +38,19 @@ type SearchInput struct {
 	Limit       int    `json:"limit,omitempty" jsonschema:"how many messages to return, at most 50; defaults to 20"`
 }
 
-func (s *Server) registerMail(server *mcp.Server) {
-	mcp.AddTool(server, &mcp.Tool{
+func (s *Server) registerMail() {
+	addTool(s, &mcp.Tool{
 		Name:        "mail_list_folders",
 		Description: "List the mail folders and their roles, such as inbox and sent.",
 		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true},
 	}, s.mailListFolders)
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(s, &mcp.Tool{
 		Name: "mail_search",
 		Description: "Search one mail folder. Results are newest arrival first. " +
 			"When more is true, more messages may match than are shown, so narrow the search.",
 		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true},
 	}, s.mailSearch)
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(s, &mcp.Tool{
 		Name: "mail_get",
 		Description: "Read one message: its headers, its text, and a list of its parts. " +
 			"The text is cut off at 64 KiB, which body_truncated reports. " +

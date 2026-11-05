@@ -515,3 +515,79 @@ func TestCalendarFreeBusy(t *testing.T) {
 		}
 	})
 }
+
+func TestCalendarCreateEventRoundTrip(t *testing.T) {
+	eachCalDAVServer(t, func(t *testing.T, s caldavServer, c *calendar.Client) {
+		session := calendarSession(t, s)
+		summary := "Lunch, then coffee; maybe\\more"
+
+		created := callTool[calendar.Event](t, session, "calendar_create_event", map[string]any{
+			"calendar_id": s.calendar,
+			"summary":     summary,
+			"location":    "Café, Room 4",
+			"description": "line one\nline two",
+			"start":       "2029-05-10T12:00",
+			"end":         "2029-05-10T13:00",
+			"timezone":    "Europe/Amsterdam",
+		})
+
+		if created.EventID == "" || created.ETag == "" || created.CalendarID != s.calendar {
+			t.Errorf("created = %+v", created)
+		}
+		got, err := c.Events(t.Context(), []string{s.calendar},
+			time.Date(2029, 5, 10, 0, 0, 0, 0, time.UTC), time.Date(2029, 5, 11, 0, 0, 0, 0, time.UTC), time.UTC)
+		if err != nil {
+			t.Fatalf("events: %v", err)
+		}
+		events := eventsOf(got.Events, created.UID)
+		if len(events) != 1 {
+			t.Fatalf("events = %+v", got.Events)
+		}
+		e := events[0]
+		if e.Summary != summary || e.Location != "Café, Room 4" || e.Description != "line one\nline two" {
+			t.Errorf("stored text = %q, %q, %q", e.Summary, e.Location, e.Description)
+		}
+		if !e.Start.Equal(time.Date(2029, 5, 10, 10, 0, 0, 0, time.UTC)) {
+			t.Errorf("stored start = %s", e.Start)
+		}
+		if e.ETag != created.ETag || e.EventID != created.EventID {
+			t.Errorf("read back %+v, created %+v", e, created)
+		}
+	})
+}
+
+func TestCalendarCreateAllDayEventRoundTrip(t *testing.T) {
+	eachCalDAVServer(t, func(t *testing.T, s caldavServer, c *calendar.Client) {
+		session := calendarSession(t, s)
+
+		created := callTool[calendar.Event](t, session, "calendar_create_event", map[string]any{
+			"calendar_id": s.calendar, "summary": "Holiday", "date": "2029-06-10", "end_date": "2029-06-12",
+		})
+
+		got, err := c.Events(t.Context(), []string{s.calendar},
+			time.Date(2029, 6, 1, 0, 0, 0, 0, time.UTC), time.Date(2029, 7, 1, 0, 0, 0, 0, time.UTC), time.UTC)
+		if err != nil {
+			t.Fatalf("events: %v", err)
+		}
+		events := eventsOf(got.Events, created.UID)
+		if len(events) != 1 || !events[0].AllDay || !events[0].End.Equal(time.Date(2029, 6, 13, 0, 0, 0, 0, time.UTC)) {
+			t.Errorf("events = %+v", events)
+		}
+	})
+}
+
+func TestCreateEventOnReadOnlyCalendarIsRefused(t *testing.T) {
+	session := calendarSession(t, caldavServers[1])
+
+	result, err := session.CallTool(t.Context(), &mcp.CallToolParams{Name: "calendar_create_event", Arguments: map[string]any{
+		"calendar_id": "/dav.php/calendars/tester/shared/", "summary": "x",
+		"start": "2029-05-10T12:00:00Z", "end": "2029-05-10T13:00:00Z",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !result.IsError {
+		t.Errorf("created an event on a read-only calendar: %s", toolText(result))
+	}
+}

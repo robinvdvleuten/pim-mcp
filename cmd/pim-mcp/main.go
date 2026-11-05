@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"runtime/debug"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -32,8 +33,8 @@ const usage = `usage:
   pim-mcp account show
   pim-mcp account test
   pim-mcp account remove
-  pim-mcp serve [--read-only]    run the MCP server over stdio
-  pim-mcp version                print the build revision
+  pim-mcp serve [--read-only] [--tools NAME,NAME]    run the MCP server over stdio
+  pim-mcp version                                    print the build revision
 `
 
 const readOnlyEnv = "PIM_MCP_READ_ONLY"
@@ -143,12 +144,19 @@ func (c *cli) runServe(ctx context.Context, args []string, version string) int {
 	flags := flag.NewFlagSet("serve", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	flags.BoolVar(&readOnly, "read-only", readOnly, "")
+	tools := flags.String("tools", "", "")
 	if err := flags.Parse(args); err != nil || flags.NArg() != 0 {
 		_, _ = fmt.Fprint(c.stderr, usage)
 		return 2
 	}
 
+	allowed, err := parseTools(*tools)
+	if err != nil {
+		return c.fail(err)
+	}
+
 	options := mcpserver.Options{
+		Tools:        allowed,
 		Version:      version,
 		ReadOnly:     readOnly,
 		Account:      c.loadAccount,
@@ -159,6 +167,22 @@ func (c *cli) runServe(ctx context.Context, args []string, version string) int {
 		return c.fail(err)
 	}
 	return 0
+}
+
+// parseTools refuses a name it doesn't know, as a typo would otherwise silently
+// leave a tool out.
+func parseTools(value string) ([]string, error) {
+	if value == "" {
+		return nil, nil
+	}
+	known := mcpserver.KnownTools()
+	names := strings.Split(value, ",")
+	for _, name := range names {
+		if !slices.Contains(known, name) {
+			return nil, fmt.Errorf("--tools: unknown tool %q, known tools are: %s", name, strings.Join(known, ", "))
+		}
+	}
+	return names, nil
 }
 
 func (c *cli) loadAccount() (*account.Account, error) {

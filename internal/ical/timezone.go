@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"os"
 	"regexp"
 	"slices"
 	"strconv"
@@ -329,6 +330,37 @@ func encodeTZif(firstOffset int, transitions []zoneTransition) ([]byte, error) {
 	}
 	out.WriteByte(0) // The one empty abbreviation that every type points at.
 	return out.Bytes(), nil
+}
+
+// LocalZone returns the user's zone with its IANA name where one can be found,
+// because time.Local only calls itself "Local". That name can't be asked of Go,
+// so it comes from where Go gets the zone itself: TZ, then /etc/localtime.
+func LocalZone() *time.Location {
+	tz, tzSet := os.LookupEnv("TZ")
+	link, _ := os.Readlink("/etc/localtime")
+	if name := localZoneName(tz, tzSet, link); name != "" {
+		if loc, err := time.LoadLocation(name); err == nil {
+			return loc
+		}
+	}
+	return time.Local
+}
+
+func localZoneName(tz string, tzSet bool, localtime string) string {
+	if tzSet {
+		tz = strings.TrimPrefix(tz, ":")
+		switch {
+		case tz == "":
+			return "UTC"
+		case strings.HasPrefix(tz, "/"):
+			return ""
+		}
+		return tz
+	}
+	if _, name, ok := strings.Cut(localtime, "zoneinfo/"); ok {
+		return name
+	}
+	return ""
 }
 
 // zoneName returns the name to report: empty when it isn't an IANA name.

@@ -12,9 +12,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
-	"github.com/emersion/go-webdav"
-	"github.com/emersion/go-webdav/caldav"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/robinvdvleuten/pim-mcp/internal/calendar"
@@ -80,6 +79,11 @@ func eachCalDAVServer(t *testing.T, test func(t *testing.T, s caldavServer, c *c
 		})
 	}
 }
+
+var (
+	eventRangeStart = time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
+	eventRangeEnd   = time.Date(2026, 12, 1, 0, 0, 0, 0, time.UTC)
+)
 
 func newEventPath(t *testing.T, s caldavServer) (path, uid string) {
 	t.Helper()
@@ -171,9 +175,8 @@ func TestCalDAVUpdateWithStaleETagLeavesServerCopy(t *testing.T) {
 	})
 }
 
-// go-webdav's queries return ETags too. Later tasks use those for writes, so
-// both must be the same value.
-func TestCalDAVETagsMatchGoWebDAVQueries(t *testing.T) {
+// Queries return ETags too, which writes then use, so both must be the same value.
+func TestCalDAVETagsMatchQueries(t *testing.T) {
 	eachCalDAVServer(t, func(t *testing.T, s caldavServer, c *calendar.Client) {
 		path, uid := newEventPath(t, s)
 		ctx := t.Context()
@@ -182,26 +185,20 @@ func TestCalDAVETagsMatchGoWebDAVQueries(t *testing.T) {
 			t.Fatalf("create: %v", err)
 		}
 
-		dav, err := caldav.NewClient(webdav.HTTPClientWithBasicAuth(nil, caldavUser, caldavPassword), s.url)
+		got, err := c.Events(ctx, []string{s.calendar}, eventRangeStart, eventRangeEnd, time.UTC)
 		if err != nil {
-			t.Fatalf("new caldav client: %v", err)
+			t.Fatalf("events: %v", err)
 		}
-		objects, err := dav.MultiGetCalendar(ctx, s.calendar, &caldav.CalendarMultiGet{
-			Paths:       []string{path},
-			CompRequest: caldav.CalendarCompRequest{Name: "VCALENDAR", AllProps: true, AllComps: true},
-		})
-		if err != nil {
-			t.Fatalf("multiget: %v", err)
+		i := slices.IndexFunc(got.Events, func(e calendar.Event) bool { return e.UID == uid })
+		if i < 0 {
+			t.Fatalf("events = %+v, want %s", got.Events, uid)
 		}
 
-		if len(objects) != 1 {
-			t.Fatalf("objects = %d, want 1", len(objects))
+		if got.Events[i].ETag != etag {
+			t.Errorf("etag from query = %q, want %q", got.Events[i].ETag, etag)
 		}
-		if objects[0].ETag != etag {
-			t.Errorf("go-webdav etag = %q, want %q", objects[0].ETag, etag)
-		}
-		if _, err := c.Update(ctx, path, objects[0].ETag, eventICS(uid, "second")); err != nil {
-			t.Errorf("update using go-webdav's etag: %v", err)
+		if _, err := c.Update(ctx, path, got.Events[i].ETag, eventICS(uid, "second")); err != nil {
+			t.Errorf("update using the query's etag: %v", err)
 		}
 	})
 }
@@ -345,4 +342,152 @@ func TestCalendarsFoundFromDiscoveredURLs(t *testing.T) {
 			}
 		})
 	}
+}
+
+func createEvent(t *testing.T, c *calendar.Client, s caldavServer, lines ...string) (path, uid string) {
+	t.Helper()
+	path, uid = newEventPath(t, s)
+	all := append([]string{"BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//pim-mcp//test//EN"}, lines...)
+	all = append(all, "END:VCALENDAR", "")
+	data := strings.ReplaceAll(strings.Join(all, "\r\n"), "UID:@", "UID:"+uid)
+	if _, err := c.Create(t.Context(), path, []byte(data)); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	return path, uid
+}
+
+func eventsOf(events []calendar.Event, uid string) []calendar.Event {
+	var found []calendar.Event
+	for _, event := range events {
+		if event.UID == uid {
+			found = append(found, event)
+		}
+	}
+	return found
+}
+
+func TestCalendarListEventsExpandsRecurringEvents(t *testing.T) {
+	eachCalDAVServer(t, func(t *testing.T, s caldavServer, c *calendar.Client) {
+		path, uid := createEvent(t, c, s,
+			"BEGIN:VEVENT", "UID:@", "DTSTAMP:20261101T120000Z", "DTSTART;TZID=Europe/Amsterdam:20261102T100000",
+			"DTEND;TZID=Europe/Amsterdam:20261102T110000", "RRULE:FREQ=WEEKLY;COUNT=4", `SUMMARY:Weekly\, with a comma`, "END:VEVENT",
+			"BEGIN:VEVENT", "UID:@", "DTSTAMP:20261101T120000Z", "RECURRENCE-ID;TZID=Europe/Amsterdam:20261109T100000",
+			"DTSTART;TZID=Europe/Amsterdam:20261120T150000", "DTEND;TZID=Europe/Amsterdam:20261120T160000", "SUMMARY:Moved", "END:VEVENT")
+		session := calendarSession(t, s)
+
+		got := callTool[calendar.EventList](t, session, "calendar_list_events", map[string]any{
+			"start":        "2026-11-01T00:00:00Z",
+			"end":          "2026-12-01T00:00:00Z",
+			"calendar_ids": []string{s.calendar},
+		})
+
+		events := eventsOf(got.Events, uid)
+		want := []struct{ occurrence, summary, start string }{
+			{"20261102T090000Z", "Weekly, with a comma", "2026-11-02T10:00:00+01:00"},
+			{"20261116T090000Z", "Weekly, with a comma", "2026-11-16T10:00:00+01:00"},
+			{"20261109T090000Z", "Moved", "2026-11-20T15:00:00+01:00"},
+			{"20261123T090000Z", "Weekly, with a comma", "2026-11-23T10:00:00+01:00"},
+		}
+		if len(events) != len(want) {
+			t.Fatalf("events = %+v, want %d", events, len(want))
+		}
+		for i, w := range want {
+			e := events[i]
+			if e.OccurrenceID != w.occurrence || e.Summary != w.summary || e.Start.Format(time.RFC3339) != w.start {
+				t.Errorf("event %d = %s %q %s, want %+v", i, e.OccurrenceID, e.Summary, e.Start.Format(time.RFC3339), w)
+			}
+			if e.EventID != path || e.ETag == "" || e.CalendarID != s.calendar || !e.Recurring || e.Timezone != "Europe/Amsterdam" {
+				t.Errorf("event %d = %+v", i, e)
+			}
+		}
+	})
+}
+
+func TestCalendarListEventsFindsAnOccurrenceMovedIntoTheRange(t *testing.T) {
+	eachCalDAVServer(t, func(t *testing.T, s caldavServer, c *calendar.Client) {
+		_, uid := createEvent(t, c, s,
+			"BEGIN:VEVENT", "UID:@", "DTSTAMP:20261101T120000Z", "DTSTART:20261102T100000Z",
+			"DTEND:20261102T110000Z", "RRULE:FREQ=DAILY;COUNT=2", "SUMMARY:Series", "END:VEVENT",
+			"BEGIN:VEVENT", "UID:@", "DTSTAMP:20261101T120000Z", "RECURRENCE-ID:20261103T100000Z",
+			"DTSTART:20270115T100000Z", "DTEND:20270115T110000Z", "SUMMARY:Far away", "END:VEVENT")
+
+		got, err := c.Events(t.Context(), []string{s.calendar},
+			time.Date(2027, 1, 15, 0, 0, 0, 0, time.UTC), time.Date(2027, 1, 16, 0, 0, 0, 0, time.UTC), time.UTC)
+		if err != nil {
+			t.Fatalf("events: %v", err)
+		}
+
+		events := eventsOf(got.Events, uid)
+		if len(events) != 1 || events[0].Summary != "Far away" {
+			t.Errorf("events = %+v", events)
+		}
+	})
+}
+
+func TestCalendarListEventsFromAllCalendarsByDefault(t *testing.T) {
+	for _, s := range caldavServers {
+		t.Run(s.name, func(t *testing.T) {
+			if s.setup != nil {
+				s.setup(t, s)
+			}
+			c, err := calendar.New(calendar.Config{URL: s.url, Username: caldavUser, Password: caldavPassword})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, uid := createEvent(t, c, s, "BEGIN:VEVENT", "UID:@", "DTSTAMP:20261101T120000Z", "DTSTART:20261105T100000Z", "SUMMARY:Found", "END:VEVENT")
+			session := calendarSession(t, s)
+
+			got := callTool[calendar.EventList](t, session, "calendar_list_events", map[string]any{
+				"start": "2026-11-05T00:00:00Z",
+				"end":   "2026-11-06T00:00:00Z",
+			})
+
+			if len(eventsOf(got.Events, uid)) != 1 {
+				t.Errorf("events = %+v", got.Events)
+			}
+		})
+	}
+}
+
+func TestCalendarListEventsReadsFloatingAndAllDayInTheUsersZone(t *testing.T) {
+	eachCalDAVServer(t, func(t *testing.T, s caldavServer, c *calendar.Client) {
+		_, floating := createEvent(t, c, s, "BEGIN:VEVENT", "UID:@", "DTSTAMP:20261101T120000Z", "DTSTART:20261110T090000", "SUMMARY:Floating", "END:VEVENT")
+		_, allDay := createEvent(t, c, s, "BEGIN:VEVENT", "UID:@", "DTSTAMP:20261101T120000Z", "DTSTART;VALUE=DATE:20261110", "SUMMARY:All day", "END:VEVENT")
+		tokyo, err := time.LoadLocation("Asia/Tokyo")
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		got, err := c.Events(t.Context(), []string{s.calendar}, eventRangeStart, eventRangeEnd, tokyo)
+		if err != nil {
+			t.Fatalf("events: %v", err)
+		}
+
+		events := eventsOf(got.Events, floating)
+		if len(events) != 1 || events[0].Start.Format(time.RFC3339) != "2026-11-10T09:00:00+09:00" {
+			t.Errorf("floating = %+v", events)
+		}
+		events = eventsOf(got.Events, allDay)
+		if len(events) != 1 || !events[0].AllDay || events[0].Start.Format(time.RFC3339) != "2026-11-10T00:00:00+09:00" {
+			t.Errorf("all day = %+v", events)
+		}
+	})
+}
+
+func TestCalendarListEventsReturnsNoICalendar(t *testing.T) {
+	eachCalDAVServer(t, func(t *testing.T, s caldavServer, c *calendar.Client) {
+		createEvent(t, c, s, "BEGIN:VEVENT", "UID:@", "DTSTAMP:20261101T120000Z", "DTSTART:20261105T100000Z", "SUMMARY:Plain", "END:VEVENT")
+		session := calendarSession(t, s)
+
+		result, err := session.CallTool(t.Context(), &mcp.CallToolParams{Name: "calendar_list_events", Arguments: map[string]any{
+			"start": "2026-11-05T00:00:00Z", "end": "2026-11-06T00:00:00Z", "calendar_ids": []string{s.calendar},
+		}})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if result.IsError || strings.Contains(toolText(result), "BEGIN:") || strings.Contains(toolText(result), "RRULE") {
+			t.Errorf("result = %s", toolText(result))
+		}
+	})
 }

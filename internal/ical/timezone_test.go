@@ -295,3 +295,46 @@ func TestSecondPassOfRepeatedHourKeepsItsLength(t *testing.T) {
 		t.Errorf("end = %s, want 30 minutes after the start", got[0].End)
 	}
 }
+
+func TestLocalZoneName(t *testing.T) {
+	tests := []struct {
+		name      string
+		tz        string
+		tzSet     bool
+		localtime string
+		want      string
+	}{
+		{name: "TZ wins", tz: "Asia/Tokyo", tzSet: true, localtime: "/usr/share/zoneinfo/Europe/Amsterdam", want: "Asia/Tokyo"},
+		{name: "TZ with its optional colon", tz: ":Asia/Tokyo", tzSet: true, want: "Asia/Tokyo"},
+		{name: "TZ set empty means UTC", tz: "", tzSet: true, localtime: "/usr/share/zoneinfo/Europe/Amsterdam", want: "UTC"},
+		{name: "link on Linux", localtime: "/usr/share/zoneinfo/Europe/Amsterdam", want: "Europe/Amsterdam"},
+		{name: "link on macOS", localtime: "/var/db/timezone/zoneinfo/America/New_York", want: "America/New_York"},
+		{name: "no link", want: ""},
+		{name: "link elsewhere", localtime: "/etc/some-file", want: ""},
+		{name: "TZ that is a path", tz: "/etc/localtime", tzSet: true, want: ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := localZoneName(tt.tz, tt.tzSet, tt.localtime); got != tt.want {
+				t.Errorf("got %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestLocalZoneUsesTZ(t *testing.T) {
+	t.Setenv("TZ", "Asia/Tokyo")
+
+	if got := LocalZone().String(); got != "Asia/Tokyo" {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestLocalZoneFallsBackToLocal(t *testing.T) {
+	t.Setenv("TZ", "Not/AZone")
+
+	if got := LocalZone(); got != time.Local {
+		t.Errorf("got %v, want time.Local", got)
+	}
+}

@@ -40,8 +40,10 @@ type davProp struct {
 	ResourceType         struct {
 		Calendar *struct{} `xml:"urn:ietf:params:xml:ns:caldav calendar"`
 	} `xml:"DAV: resourcetype"`
-	Color      string `xml:"http://apple.com/ns/ical/ calendar-color"`
-	Privileges []struct {
+	Color        string `xml:"http://apple.com/ns/ical/ calendar-color"`
+	ETag         string `xml:"DAV: getetag"`
+	CalendarData string `xml:"urn:ietf:params:xml:ns:caldav calendar-data"`
+	Privileges   []struct {
 		All          *struct{} `xml:"DAV: all"`
 		Write        *struct{} `xml:"DAV: write"`
 		WriteContent *struct{} `xml:"DAV: write-content"`
@@ -166,7 +168,12 @@ func (c *Client) hrefPath(href string) (string, error) {
 func (c *Client) propfind(ctx context.Context, target, depth, props string) ([]davResponse, error) {
 	body := `<?xml version="1.0" encoding="utf-8"?><d:propfind xmlns:d="` + nsDAV + `" xmlns:c="` + nsCalDAV +
 		`" xmlns:a="` + nsApple + `"><d:prop>` + props + `</d:prop></d:propfind>`
-	req, err := c.newRequest(ctx, "PROPFIND", target, strings.NewReader(body))
+	return c.multistatus(ctx, "PROPFIND", target, depth, body)
+}
+
+// multistatus sends a WebDAV request and reads the responses it gets back.
+func (c *Client) multistatus(ctx context.Context, method, target, depth, body string) ([]davResponse, error) {
+	req, err := c.newRequest(ctx, method, target, strings.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
@@ -175,15 +182,15 @@ func (c *Client) propfind(ctx context.Context, target, depth, props string) ([]d
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("propfind %s: %w", target, err)
+		return nil, fmt.Errorf("%s %s: %w", method, target, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	switch resp.StatusCode {
 	case http.StatusMultiStatus:
 	case http.StatusUnauthorized, http.StatusForbidden:
-		return nil, fmt.Errorf("propfind %s: %w", target, ErrLoginRefused)
+		return nil, fmt.Errorf("%s %s: %w", method, target, ErrLoginRefused)
 	default:
-		return nil, fmt.Errorf("propfind %s: %s", target, resp.Status)
+		return nil, fmt.Errorf("%s %s: %s", method, target, resp.Status)
 	}
 
 	var status struct {
@@ -194,7 +201,7 @@ func (c *Client) propfind(ctx context.Context, target, depth, props string) ([]d
 		if errors.Is(err, io.EOF) {
 			err = io.ErrUnexpectedEOF
 		}
-		return nil, fmt.Errorf("propfind %s: parse response: %w", target, err)
+		return nil, fmt.Errorf("%s %s: parse response: %w", method, target, err)
 	}
 	return status.Responses, nil
 }

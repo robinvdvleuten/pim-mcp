@@ -3,11 +3,13 @@ package mcpserver
 
 import (
 	"context"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/robinvdvleuten/pim-mcp/internal/account"
 	"github.com/robinvdvleuten/pim-mcp/internal/calendar"
+	"github.com/robinvdvleuten/pim-mcp/internal/ical"
 	"github.com/robinvdvleuten/pim-mcp/internal/mail"
 )
 
@@ -26,6 +28,9 @@ type Options struct {
 	DialMail func(context.Context) (*mail.Client, error)
 	// DialCalendar returns a calendar client, for one tool call.
 	DialCalendar func() (*calendar.Client, error)
+	// Zone is the user's zone, for floating times and all-day events. It defaults
+	// to this machine's.
+	Zone *time.Location
 }
 
 // Server holds what the tools share.
@@ -35,6 +40,9 @@ type Server struct {
 
 // New returns the MCP server.
 func New(options Options) *mcp.Server {
+	if options.Zone == nil {
+		options.Zone = ical.LocalZone()
+	}
 	s := &Server{options: options}
 	server := mcp.NewServer(&mcp.Implementation{Name: "pim-mcp", Version: options.Version}, nil)
 	mcp.AddTool(server, &mcp.Tool{

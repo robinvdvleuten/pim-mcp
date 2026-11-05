@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
@@ -11,6 +13,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/robinvdvleuten/pim-mcp/internal/account"
+	"github.com/robinvdvleuten/pim-mcp/internal/calendar"
 	"github.com/robinvdvleuten/pim-mcp/internal/mail"
 )
 
@@ -190,6 +193,37 @@ func TestMailToolsReportConnectionFailure(t *testing.T) {
 
 			if !result.IsError || !strings.Contains(errorText(result), "no account configured") {
 				t.Errorf("error = %v, text = %q", result.IsError, errorText(result))
+			}
+		})
+	}
+}
+
+func TestCalendarListEventsRefusesBadInputWithoutConnecting(t *testing.T) {
+	tests := map[string]map[string]any{
+		"bad start":      {"start": "soon", "end": "2026-11-10"},
+		"bad end":        {"start": "2026-11-10", "end": "later"},
+		"no zone":        {"start": "2026-11-10T09:00:00", "end": "2026-11-11"},
+		"missing end":    {"start": "2026-11-10"},
+		"end first":      {"start": "2026-11-11", "end": "2026-11-10"},
+		"range too long": {"start": "2026-01-01", "end": "2027-06-01"},
+	}
+
+	for name, args := range tests {
+		t.Run(name, func(t *testing.T) {
+			var requests int
+			server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { requests++ }))
+			t.Cleanup(server.Close)
+			session := connect(t, New(Options{Version: "test", DialCalendar: func() (*calendar.Client, error) {
+				return calendar.New(calendar.Config{URL: server.URL})
+			}}))
+
+			result, err := session.CallTool(context.Background(), &mcp.CallToolParams{Name: "calendar_list_events", Arguments: args})
+
+			if err == nil && !result.IsError {
+				t.Error("call succeeded")
+			}
+			if requests != 0 {
+				t.Errorf("sent %d requests", requests)
 			}
 		})
 	}

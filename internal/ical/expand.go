@@ -13,8 +13,9 @@ import (
 )
 
 const (
-	maxRange       = 366 * 24 * time.Hour
-	maxOccurrences = 1000
+	maxRange = 366 * 24 * time.Hour
+	// MaxOccurrences is the most a single query may return.
+	MaxOccurrences = 1000
 	// maxRuleSteps bounds the walk from DTSTART to the range. Invites come from
 	// strangers, so a rule such as FREQ=SECONDLY must not be free to run long.
 	maxRuleSteps = 1_000_000
@@ -27,7 +28,7 @@ const (
 var (
 	ErrInvalidRange       = errors.New("range end must be after its start")
 	ErrRangeTooLarge      = fmt.Errorf("range is longer than %d days", maxRange/(24*time.Hour))
-	ErrTooManyOccurrences = fmt.Errorf("range holds more than %d occurrences, use a shorter range", maxOccurrences)
+	ErrTooManyOccurrences = fmt.Errorf("range holds more than %d occurrences, use a shorter range", MaxOccurrences)
 	ErrRuleTooExpensive   = errors.New("recurrence rule repeats too often to expand")
 	ErrRuleTooOld         = errors.New("recurrence rule started too long ago to expand")
 )
@@ -35,15 +36,24 @@ var (
 // untilDatePattern finds an UNTIL holding a date rather than a date-time.
 var untilDatePattern = regexp.MustCompile(`(?i)UNTIL=\d{8}(;|$)`)
 
+// CheckRange refuses a range that Expand would refuse, so that callers can do so
+// before fetching anything.
+func CheckRange(start, end time.Time) error {
+	if !end.After(start) {
+		return ErrInvalidRange
+	}
+	if end.Sub(start) > maxRange {
+		return ErrRangeTooLarge
+	}
+	return nil
+}
+
 // Expand returns the occurrences that overlap [start, end), ordered by start.
 // Values without a zone of their own, such as all-day events, are read in loc:
 // the zone of the user who asked.
 func Expand(cal *goical.Calendar, start, end time.Time, loc *time.Location) ([]Occurrence, error) {
-	if !end.After(start) {
-		return nil, ErrInvalidRange
-	}
-	if end.Sub(start) > maxRange {
-		return nil, ErrRangeTooLarge
+	if err := CheckRange(start, end); err != nil {
+		return nil, err
 	}
 
 	z := newZones(cal, loc)
@@ -54,7 +64,7 @@ func Expand(cal *goical.Calendar, start, end time.Time, loc *time.Location) ([]O
 			return nil, fmt.Errorf("event %q: %w", s.uid, err)
 		}
 		occurrences = append(occurrences, expanded...)
-		if len(occurrences) > maxOccurrences {
+		if len(occurrences) > MaxOccurrences {
 			return nil, ErrTooManyOccurrences
 		}
 	}
@@ -130,7 +140,7 @@ func (s *series) expand(z *zones, rangeStart, rangeEnd time.Time) ([]Occurrence,
 			return nil, err
 		}
 		occurrences = append(occurrences, expanded...)
-		if len(occurrences) > maxOccurrences {
+		if len(occurrences) > MaxOccurrences {
 			return nil, ErrTooManyOccurrences
 		}
 	}
@@ -188,7 +198,7 @@ func expandMaster(z *zones, event *goical.Event, overridden map[int64]bool, rang
 		}
 		occurrence.Start, occurrence.End = at, end
 		occurrences = append(occurrences, occurrence)
-		if len(occurrences) > maxOccurrences {
+		if len(occurrences) > MaxOccurrences {
 			return ErrTooManyOccurrences
 		}
 		return nil

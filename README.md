@@ -1,6 +1,6 @@
 # pim-mcp
 
-Lets an AI agent read your mail and manage your calendar on your own servers, with one login. The agent can find the meeting in an email and put it in your calendar in one step, with recurrence and time zones intact. It's built on the assumption that agents make mistakes and that invites come from strangers: your password stays in your keychain, your mail can't be changed, and a stale write can't overwrite an edit you just made on your phone.
+PIM is short for personal information manager, the kind of app that keeps your mail and calendar together. pim-mcp lets an AI agent read your mail and manage your calendar on your own servers, with one login. The agent can find the meeting in an email and put it in your calendar in one step, with recurrence and time zones intact. It's built on the assumption that agents make mistakes and that invites come from strangers: your password stays in your keychain, your mail can't be changed, and a stale write can't overwrite an edit you just made on your phone.
 
 - **One account.** Enter your email address and password, and it finds your IMAP and CalDAV servers itself.
 - **Password in your keychain.** Never in a config file, never in logs, and never sent anywhere until you've confirmed the servers.

@@ -96,7 +96,7 @@ func TestEventsAsksTheServerForAWiderRange(t *testing.T) {
 		t.Fatalf("events: %v", err)
 	}
 
-	if len(*bodies) != 1 {
+	if len(*bodies) != 2 {
 		t.Fatalf("requests = %d", len(*bodies))
 	}
 	body := (*bodies)[0]
@@ -235,5 +235,42 @@ func TestCreateEventRefusesBadFieldsWithoutWriting(t *testing.T) {
 				t.Errorf("sent %d requests", requests)
 			}
 		})
+	}
+}
+
+func TestOversizedResponsesAreRefused(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			w.WriteHeader(http.StatusMultiStatus)
+		}
+		_, _ = w.Write(make([]byte, maxResponseBytes+1))
+	}))
+	t.Cleanup(server.Close)
+	client, err := New(Config{URL: server.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := client.Get(t.Context(), "/event.ics"); !errors.Is(err, ErrResponseTooLarge) {
+		t.Errorf("get: err = %v, want ErrResponseTooLarge", err)
+	}
+	if _, err := client.Events(t.Context(), []string{"/cal/"}, rangeStart, rangeEnd, time.UTC); !errors.Is(err, ErrResponseTooLarge) {
+		t.Errorf("events: err = %v, want ErrResponseTooLarge", err)
+	}
+}
+
+func TestEventsAlsoAsksForEventsWithChangedOccurrences(t *testing.T) {
+	client, bodies := reportServer(t, map[string]string{"/cal/": eventResponse("/cal/in.ics", "1", icsEvent("in", "20261110T120000Z"))})
+
+	got, err := client.Events(t.Context(), []string{"/cal/"}, rangeStart, rangeEnd, time.UTC)
+	if err != nil {
+		t.Fatalf("events: %v", err)
+	}
+
+	if len(*bodies) != 2 || !strings.Contains((*bodies)[1], `prop-filter name="RECURRENCE-ID"`) {
+		t.Errorf("requests = %q", *bodies)
+	}
+	if len(got.Events) != 1 {
+		t.Errorf("events = %+v, want one found by both queries to appear once", got.Events)
 	}
 }

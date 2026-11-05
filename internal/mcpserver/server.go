@@ -3,6 +3,7 @@ package mcpserver
 
 import (
 	"context"
+	"log/slog"
 	"slices"
 	"time"
 
@@ -31,6 +32,9 @@ type Options struct {
 	DialCalendar func() (*calendar.Client, error)
 	// Tools narrows the tools to these names, if set. Read-only mode still applies.
 	Tools []string
+	// Logger receives one record per request at debug level. Tool arguments and
+	// results aren't in it, as those hold people's mail and calendars.
+	Logger *slog.Logger
 	// Zone is the user's zone, for floating times and all-day events. It defaults
 	// to this machine's.
 	Zone *time.Location
@@ -64,6 +68,9 @@ func newServer(options Options) *Server {
 	s.registerMail()
 	s.registerCalendar()
 	s.registerImport()
+	if options.Logger != nil {
+		s.mcp.AddReceivingMiddleware(logRequests(options.Logger))
+	}
 	return s
 }
 
@@ -83,4 +90,22 @@ func addTool[In, Out any](s *Server, tool *mcp.Tool, handler mcp.ToolHandlerFor[
 		return
 	}
 	mcp.AddTool(s.mcp, tool, handler)
+}
+
+func logRequests(logger *slog.Logger) mcp.Middleware {
+	return func(next mcp.MethodHandler) mcp.MethodHandler {
+		return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
+			started := time.Now()
+			result, err := next(ctx, method, req)
+			attrs := []any{"method", method, "duration", time.Since(started).Round(time.Millisecond), "failed", err != nil}
+			if call, ok := req.(*mcp.CallToolRequest); ok && call.Params != nil {
+				attrs = append(attrs, "tool", call.Params.Name)
+			}
+			if call, ok := result.(*mcp.CallToolResult); ok && call != nil {
+				attrs = append(attrs, "tool_error", call.IsError)
+			}
+			logger.Debug("request", attrs...)
+			return result, err
+		}
+	}
 }

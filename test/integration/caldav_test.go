@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -44,6 +45,17 @@ var caldavServers = []caldavServer{
 		url:      "http://127.0.0.1:35233/dav.php/",
 		calendar: "/dav.php/calendars/tester/default/",
 	},
+}
+
+// Nextcloud is heavy, so it only joins in when its compose profile is running.
+func init() {
+	if os.Getenv("PIM_MCP_TEST_NEXTCLOUD") != "" {
+		caldavServers = append(caldavServers, caldavServer{
+			name:     "nextcloud",
+			url:      "http://127.0.0.1:35234/remote.php/dav/",
+			calendar: "/remote.php/dav/calendars/tester/personal/",
+		})
+	}
 }
 
 // createRadicaleCalendar makes the calendar, which Baïkal's seed already has.

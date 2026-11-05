@@ -3,9 +3,7 @@ package calendar
 import (
 	"context"
 	"encoding/xml"
-	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"path"
@@ -17,8 +15,6 @@ const (
 	nsDAV    = "DAV:"
 	nsCalDAV = "urn:ietf:params:xml:ns:caldav"
 	nsApple  = "http://apple.com/ns/ical/"
-
-	maxMultistatusBytes = 16 << 20
 )
 
 // Calendar is a collection of events. ID is its path on the server.
@@ -193,14 +189,14 @@ func (c *Client) multistatus(ctx context.Context, method, target, depth, body st
 		return nil, fmt.Errorf("%s %s: %s", method, target, resp.Status)
 	}
 
+	data, err := readLimited(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("%s %s: %w", method, target, err)
+	}
 	var status struct {
 		Responses []davResponse `xml:"DAV: response"`
 	}
-	decoder := xml.NewDecoder(io.LimitReader(resp.Body, maxMultistatusBytes))
-	if err := decoder.Decode(&status); err != nil {
-		if errors.Is(err, io.EOF) {
-			err = io.ErrUnexpectedEOF
-		}
+	if err := xml.Unmarshal(data, &status); err != nil {
 		return nil, fmt.Errorf("%s %s: parse response: %w", method, target, err)
 	}
 	return status.Responses, nil

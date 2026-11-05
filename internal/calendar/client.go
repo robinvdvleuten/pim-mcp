@@ -14,8 +14,13 @@ import (
 	"github.com/robinvdvleuten/pim-mcp/internal/transport"
 )
 
+// maxResponseBytes bounds what a server can make us hold in memory.
+const maxResponseBytes = 16 << 20
+
 // Errors callers can act on.
 var (
+	// ErrResponseTooLarge means a server sent more than we read.
+	ErrResponseTooLarge = errors.New("the server's response is over the 16 MiB limit, ask for less")
 	// ErrConflict means the event changed on the server since it was read.
 	ErrConflict = errors.New("conflict: event changed elsewhere, re-read it")
 	// ErrLoginRefused means the server turned down the username or password.
@@ -120,7 +125,7 @@ func (c *Client) Get(ctx context.Context, path string) (*Object, error) {
 	default:
 		return nil, fmt.Errorf("get %s: %s", path, resp.Status)
 	}
-	data, err := io.ReadAll(resp.Body)
+	data, err := readLimited(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("get %s: %w", path, err)
 	}
@@ -223,4 +228,15 @@ func (c *Client) newRequest(ctx context.Context, method, path string, body io.Re
 // is the safe outcome: the write reports a conflict instead of overwriting.
 func unquoteETag(etag string) string {
 	return strings.Trim(strings.TrimPrefix(etag, "W/"), `"`)
+}
+
+func readLimited(body io.Reader) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(body, maxResponseBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > maxResponseBytes {
+		return nil, ErrResponseTooLarge
+	}
+	return data, nil
 }

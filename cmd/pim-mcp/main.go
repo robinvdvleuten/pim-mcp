@@ -37,7 +37,10 @@ const usage = `usage:
   pim-mcp version                                    print the build revision
 `
 
-const readOnlyEnv = "PIM_MCP_READ_ONLY"
+const (
+	readOnlyEnv = "PIM_MCP_READ_ONLY"
+	debugEnv    = "PIM_MCP_DEBUG"
+)
 
 var errNoConfigDir = errors.New("can't find the config directory, is HOME set?")
 
@@ -237,7 +240,12 @@ func readOnlyFromEnv() (bool, error) {
 // serve blocks until the client disconnects. Stdout belongs to the MCP
 // transport, so logs go to stderr.
 func serve(ctx context.Context, options mcpserver.Options, stderr io.Writer) error {
-	logger := slog.New(slog.NewTextHandler(stderr, nil))
+	level := slog.LevelInfo
+	if os.Getenv(debugEnv) != "" {
+		level = slog.LevelDebug
+	}
+	logger := slog.New(slog.NewTextHandler(stderr, &slog.HandlerOptions{Level: level}))
+	options.Logger = logger
 	logger.Info("starting server", "version", options.Version, "read_only", options.ReadOnly)
 
 	if err := mcpserver.New(options).Run(ctx, &mcp.StdioTransport{}); err != nil {

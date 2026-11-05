@@ -512,3 +512,61 @@ func TestImportCancellationPreviewWritesNothing(t *testing.T) {
 		}
 	})
 }
+
+func TestImportNeedsACalendar(t *testing.T) {
+	user := newMailbox(t)
+	seed(t, user, inviteMail("REQUEST", vevent(newUID(t), "DTSTART:20340110T090000Z", "SUMMARY:x")))
+	session := importSession(t, user, caldavServers[1])
+
+	for _, confirm := range []bool{false, true} {
+		result, err := session.CallTool(t.Context(), &mcp.CallToolParams{Name: "calendar_import_from_email", Arguments: map[string]any{
+			"message_id": firstMessageID(t, session), "calendar_id": "", "confirm": confirm,
+		}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !result.IsError {
+			t.Errorf("confirm %v: call succeeded: %s", confirm, toolText(result))
+		}
+	}
+}
+
+func TestImportCancellationOfTheOnlyOccurrenceRemovesTheEvent(t *testing.T) {
+	eachImportServer(t, func(t *testing.T, s caldavServer, c *calendar.Client, user string, session *mcp.ClientSession) {
+		uid := newUID(t)
+		seed(t, user, inviteMail("REQUEST", vevent(uid, "SEQUENCE:1", "RECURRENCE-ID:20340210T090000Z", "DTSTART:20340210T090000Z", "DTEND:20340210T100000Z", "SUMMARY:Just this one")))
+		imported := confirmImport(t, session, s.calendar)
+		seed(t, user, inviteMail("CANCEL", vevent(uid, "SEQUENCE:2", "RECURRENCE-ID:20340210T090000Z", "DTSTART:20340210T090000Z", "SUMMARY:Just this one")))
+
+		got := confirmImport(t, session, s.calendar)
+
+		if !got.Written {
+			t.Errorf("result = %+v", got)
+		}
+		if _, err := c.Get(t.Context(), imported.Events[0].EventID); !errors.Is(err, calendar.ErrEventNotFound) {
+			t.Errorf("get: %v, want it gone", err)
+		}
+	})
+}
+
+func TestImportUpdateReportsTheStoredETag(t *testing.T) {
+	eachImportServer(t, func(t *testing.T, s caldavServer, c *calendar.Client, user string, session *mcp.ClientSession) {
+		uid := newUID(t)
+		seed(t, user, inviteMail("REQUEST", vevent(uid, "SEQUENCE:1", "DTSTART:20340310T090000Z", "DTEND:20340310T100000Z", "SUMMARY:First")))
+		first := confirmImport(t, session, s.calendar)
+		seed(t, user, inviteMail("REQUEST", vevent(uid, "SEQUENCE:2", "DTSTART:20340310T090000Z", "DTEND:20340310T100000Z", "SUMMARY:Second")))
+
+		second := confirmImport(t, session, s.calendar)
+
+		if second.Events[0].EventID != first.Events[0].EventID || second.Events[0].ETag == first.Events[0].ETag {
+			t.Errorf("first = %+v, second = %+v", first.Events[0], second.Events[0])
+		}
+		now, err := c.Get(t.Context(), first.Events[0].EventID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if now.ETag != second.Events[0].ETag {
+			t.Errorf("stored etag = %s, reported %s", now.ETag, second.Events[0].ETag)
+		}
+	})
+}

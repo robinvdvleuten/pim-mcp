@@ -114,16 +114,36 @@ func expandObject(data string, start, end time.Time, loc *time.Location) ([]ical
 }
 
 // queryEvents asks for a day more on each side than needed, because a server
-// reads floating times in a zone of its own. Expanding then gets it exact.
+// reads floating times in a zone of its own. Expanding then gets it exact. It also
+// asks for every event with a changed occurrence, whatever its dates: Nextcloud's
+// range filter goes by the series, and misses an occurrence moved outside of it.
 func (c *Client) queryEvents(ctx context.Context, calendarID string, start, end time.Time) ([]davResponse, error) {
+	inRange, err := c.reportEvents(ctx, calendarID, fmt.Sprintf(`<c:time-range start="%s" end="%s"/>`,
+		start.UTC().AddDate(0, 0, -1).Format(timeRangeFormat),
+		end.UTC().AddDate(0, 0, 1).Format(timeRangeFormat)))
+	if err != nil {
+		return nil, err
+	}
+	withOverrides, err := c.reportEvents(ctx, calendarID, `<c:prop-filter name="RECURRENCE-ID"/>`)
+	if err != nil {
+		return nil, err
+	}
+	seen := map[string]bool{}
+	var responses []davResponse
+	for _, response := range slices.Concat(inRange, withOverrides) {
+		if !seen[response.Href] {
+			seen[response.Href] = true
+			responses = append(responses, response)
+		}
+	}
+	return responses, nil
+}
+
+func (c *Client) reportEvents(ctx context.Context, calendarID, filter string) ([]davResponse, error) {
 	body := fmt.Sprintf(`<?xml version="1.0" encoding="utf-8"?><c:calendar-query xmlns:d="%s" xmlns:c="%s">
 <d:prop><d:getetag/><c:calendar-data/></d:prop>
-<c:filter><c:comp-filter name="VCALENDAR"><c:comp-filter name="VEVENT">
-<c:time-range start="%s" end="%s"/>
-</c:comp-filter></c:comp-filter></c:filter></c:calendar-query>`,
-		nsDAV, nsCalDAV,
-		start.UTC().AddDate(0, 0, -1).Format(timeRangeFormat),
-		end.UTC().AddDate(0, 0, 1).Format(timeRangeFormat))
+<c:filter><c:comp-filter name="VCALENDAR"><c:comp-filter name="VEVENT">%s</c:comp-filter></c:comp-filter></c:filter></c:calendar-query>`,
+		nsDAV, nsCalDAV, filter)
 	return c.multistatus(ctx, "REPORT", calendarID, "1", body)
 }
 

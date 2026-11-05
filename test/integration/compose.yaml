@@ -35,3 +35,20 @@ services:
       interval: 2s
       timeout: 2s
       retries: 15
+
+  # Heavy, and so left out unless asked for: --profile nextcloud
+  nextcloud:
+    profiles: [nextcloud]
+    image: nextcloud:35.0.2-apache
+    environment:
+      SQLITE_DATABASE: nextcloud
+      NEXTCLOUD_ADMIN_USER: tester
+      NEXTCLOUD_ADMIN_PASSWORD: test-password
+      NEXTCLOUD_TRUSTED_DOMAINS: 127.0.0.1 localhost
+    ports:
+      - "127.0.0.1:35234:80"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs http://localhost/status.php | grep -q '\"installed\":true'"]
+      interval: 5s
+      timeout: 5s
+      retries: 60

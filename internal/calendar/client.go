@@ -51,7 +51,7 @@ func New(cfg Config) (*Client, error) {
 	if err != nil {
 		return nil, errors.New("parse CalDAV URL")
 	}
-	if err := checkTransport(base); err != nil {
+	if err := transport.CheckURL(base); err != nil {
 		return nil, err
 	}
 	return &Client{
@@ -68,20 +68,7 @@ func checkRedirect(req *http.Request, via []*http.Request) error {
 	if len(via) >= maxRedirects {
 		return fmt.Errorf("stopped after %d redirects", maxRedirects)
 	}
-	return checkTransport(req.URL)
-}
-
-func checkTransport(u *url.URL) error {
-	switch {
-	case u.Scheme == "https":
-		return nil
-	case u.Scheme == "http" && transport.IsLoopback(u.Hostname()):
-		return nil
-	case u.Scheme == "http":
-		return fmt.Errorf("connect to %s: %w", u.Hostname(), transport.ErrInsecure)
-	default:
-		return fmt.Errorf("unsupported URL scheme %q", u.Scheme)
-	}
+	return transport.CheckURL(req.URL)
 }
 
 // Get returns the stored resource at path.

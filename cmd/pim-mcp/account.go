@@ -8,9 +8,14 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/robinvdvleuten/pim-mcp/internal/account"
+	"github.com/robinvdvleuten/pim-mcp/internal/calendar"
+	"github.com/robinvdvleuten/pim-mcp/internal/mail"
 )
+
+const checkTimeout = 20 * time.Second
 
 func (c *cli) runAccount(ctx context.Context, args []string) int {
 	if len(args) == 0 {
@@ -20,15 +25,19 @@ func (c *cli) runAccount(ctx context.Context, args []string) int {
 	switch args[0] {
 	case "add":
 		return c.accountAdd(ctx, args[1:])
-	case "show", "remove":
+	case "show", "remove", "test":
 		if len(args) != 1 {
 			_, _ = fmt.Fprint(c.stderr, usage)
 			return 2
 		}
-		if args[0] == "show" {
+		switch args[0] {
+		case "show":
 			return c.accountShow()
+		case "remove":
+			return c.accountRemove()
+		default:
+			return c.accountTest(ctx)
 		}
-		return c.accountRemove()
 	default:
 		_, _ = fmt.Fprint(c.stderr, usage)
 		return 2
@@ -176,6 +185,72 @@ func passwordStatus(email string) string {
 	default:
 		return source
 	}
+}
+
+// accountTest logs in to each service and reports each result, so one broken
+// service doesn't hide the state of the other.
+func (c *cli) accountTest(ctx context.Context) int {
+	a, err := c.store.Load()
+	if err != nil {
+		return c.fail(err)
+	}
+	password, _, err := account.Password(a.Email)
+	if err != nil {
+		return c.fail(err)
+	}
+
+	code := 0
+	for _, check := range []struct {
+		label string
+		run   func(context.Context, *account.Account, string) error
+	}{
+		{"imap:  ", c.checkIMAP},
+		{"caldav:", c.checkCalDAV},
+	} {
+		checkCtx, cancel := context.WithTimeout(ctx, checkTimeout)
+		err := check.run(checkCtx, a, password)
+		cancel()
+		if err != nil {
+			code = 1
+			_, _ = fmt.Fprintf(c.stdout, "%s failed: %v\n", check.label, err)
+			continue
+		}
+		_, _ = fmt.Fprintf(c.stdout, "%s ok\n", check.label)
+	}
+	return code
+}
+
+func checkIMAP(ctx context.Context, a *account.Account, password string) error {
+	client, err := mail.Dial(ctx, mail.Config{
+		Addr:     a.IMAP.Addr,
+		Security: mailSecurity(a.IMAP.Security),
+		Username: a.Username,
+		Password: password,
+	})
+	if err != nil {
+		return err
+	}
+	return client.Close()
+}
+
+// mailSecurity falls through to TLS, the safest choice, on anything unknown.
+func mailSecurity(security string) mail.Security {
+	switch security {
+	case account.SecurityStartTLS:
+		return mail.SecurityStartTLS
+	case account.SecurityNone:
+		return mail.SecurityNone
+	default:
+		return mail.SecurityTLS
+	}
+}
+
+func checkCalDAV(ctx context.Context, a *account.Account, password string) error {
+	client, err := calendar.New(calendar.Config{URL: a.CalDAV.URL, Username: a.Username, Password: password})
+	if err != nil {
+		return err
+	}
+	return client.CheckLogin(ctx)
 }
 
 func (c *cli) accountRemove() int {

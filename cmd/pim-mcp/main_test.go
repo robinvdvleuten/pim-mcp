@@ -3,9 +3,12 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime/debug"
+	"slices"
 	"strings"
 	"testing"
 
@@ -81,6 +84,7 @@ func TestRunRejectsBadUsage(t *testing.T) {
 		"unknown command": {"nonsense"},
 		"version arg":     {"version", "extra"},
 		"serve arg":       {"serve", "extra"},
+		"serve bad flag":  {"serve", "--nonsense"},
 	}
 
 	for name, args := range tests {
@@ -102,30 +106,47 @@ func TestRunRejectsBadUsage(t *testing.T) {
 	}
 }
 
-// TestServeSpeaksMCPOverStdio runs the real binary, because stdout carrying
-// nothing but the protocol can only be proven across a process boundary.
-func TestServeSpeaksMCPOverStdio(t *testing.T) {
+func buildBinary(t *testing.T) string {
+	t.Helper()
 	binary := filepath.Join(t.TempDir(), "pim-mcp")
 	if out, err := exec.Command("go", "build", "-o", binary, ".").CombinedOutput(); err != nil {
 		t.Fatalf("build: %v\n%s", err, out)
 	}
+	return binary
+}
 
-	var stderr bytes.Buffer
-	cmd := exec.Command(binary, "serve")
-	cmd.Stderr = &stderr
+// isolatedEnv points the binary at an empty home, with a password that keeps it
+// away from the real keychain.
+func isolatedEnv(t *testing.T) []string {
+	t.Helper()
+	home := t.TempDir()
+	return append(os.Environ(), "HOME="+home, "XDG_CONFIG_HOME="+filepath.Join(home, "config"), "PIM_MCP_PASSWORD="+secretPassword)
+}
 
+const secretPassword = "stdio-test-secret" //nolint:gosec // Made up for this test.
+
+func connectBinary(t *testing.T, cmd *exec.Cmd) *mcp.ClientSession {
+	t.Helper()
 	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "test"}, nil)
 	session, err := client.Connect(context.Background(), &mcp.CommandTransport{Command: cmd}, nil)
 	if err != nil {
-		t.Fatalf("connect: %v\nstderr: %s", err, stderr.String())
+		t.Fatalf("connect: %v", err)
 	}
+	return session
+}
 
-	result, err := session.ListTools(context.Background(), nil)
-	if err != nil {
+// TestServeSpeaksMCPOverStdio runs the real binary, because stdout carrying
+// nothing but the protocol can only be proven across a process boundary.
+func TestServeSpeaksMCPOverStdio(t *testing.T) {
+	var stderr bytes.Buffer
+	cmd := exec.Command(buildBinary(t), "serve")
+	cmd.Env = isolatedEnv(t)
+	cmd.Stderr = &stderr
+
+	session := connectBinary(t, cmd)
+
+	if _, err := session.ListTools(context.Background(), nil); err != nil {
 		t.Fatalf("list tools: %v", err)
-	}
-	if len(result.Tools) != 0 {
-		t.Errorf("tools = %v, want none", result.Tools)
 	}
 	if name := session.InitializeResult().ServerInfo.Name; name != "pim-mcp" {
 		t.Errorf("server name = %q, want %q", name, "pim-mcp")
@@ -136,5 +157,75 @@ func TestServeSpeaksMCPOverStdio(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "starting server") {
 		t.Errorf("stderr = %q, want the startup log line", stderr.String())
+	}
+}
+
+func callAccountInfo(t *testing.T, env []string, args ...string) (string, bool) {
+	t.Helper()
+	var stderr bytes.Buffer
+	cmd := exec.Command(buildBinary(t), append([]string{"serve"}, args...)...)
+	cmd.Env = env
+	cmd.Stderr = &stderr
+	session := connectBinary(t, cmd)
+
+	result, err := session.CallTool(context.Background(), &mcp.CallToolParams{Name: "account_info"})
+	if err != nil {
+		t.Fatalf("call: %v", err)
+	}
+	data, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The process writes to stderr until it has exited.
+	if err := session.Close(); err != nil {
+		t.Errorf("close: %v", err)
+	}
+	if strings.Contains(string(data)+stderr.String(), secretPassword) {
+		t.Errorf("output contains the password: %s %s", data, stderr.String())
+	}
+	return string(data), result.IsError
+}
+
+func TestServeReportsTheAccountWithoutItsPassword(t *testing.T) {
+	env := isolatedEnv(t)
+	add := exec.Command(buildBinary(t), "account", "add", "--email", "me@example.org",
+		"--imap", "mail.example.org:993", "--caldav", "https://dav.example.org/")
+	add.Env = env
+	if out, err := add.CombinedOutput(); err != nil {
+		t.Fatalf("add: %v\n%s", err, out)
+	}
+
+	tests := []struct {
+		name string
+		args []string
+		env  []string
+		want string
+	}{
+		{name: "writable", want: `"read_only":false`},
+		{name: "flag", args: []string{"--read-only"}, want: `"read_only":true`},
+		{name: "environment", env: []string{"PIM_MCP_READ_ONLY=1"}, want: `"read_only":true`},
+		{name: "environment off", env: []string{"PIM_MCP_READ_ONLY=0"}, want: `"read_only":false`},
+		{name: "flag beats environment", args: []string{"--read-only=false"}, env: []string{"PIM_MCP_READ_ONLY=1"}, want: `"read_only":false`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			output, isError := callAccountInfo(t, append(slices.Clone(env), tt.env...), tt.args...)
+
+			if isError {
+				t.Fatalf("tool error: %s", output)
+			}
+			if !strings.Contains(output, tt.want) || !strings.Contains(output, "me@example.org") {
+				t.Errorf("output = %s, want %s", output, tt.want)
+			}
+		})
+	}
+}
+
+func TestServeWithoutAccountTellsTheAgentWhatToDo(t *testing.T) {
+	output, isError := callAccountInfo(t, isolatedEnv(t))
+
+	if !isError || !strings.Contains(output, "account add") {
+		t.Errorf("error = %v, output = %s", isError, output)
 	}
 }

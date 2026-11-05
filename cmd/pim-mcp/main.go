@@ -5,12 +5,14 @@ import (
 	"bufio"
 	"context"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"os/signal"
 	"runtime/debug"
+	"strconv"
 	"strings"
 	"syscall"
 
@@ -26,10 +28,15 @@ const usage = `usage:
                       [--imap-security tls|starttls|none] [--caldav URL]
                       [--no-ispdb]
   pim-mcp account show
+  pim-mcp account test
   pim-mcp account remove
-  pim-mcp serve      run the MCP server over stdio
-  pim-mcp version    print the build revision
+  pim-mcp serve [--read-only]    run the MCP server over stdio
+  pim-mcp version                print the build revision
 `
+
+const readOnlyEnv = "PIM_MCP_READ_ONLY"
+
+var errNoConfigDir = errors.New("can't find the config directory, is HOME set?")
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -43,6 +50,8 @@ type cli struct {
 	stdout, stderr io.Writer
 	store          *account.Store
 	discoverer     discoverer
+	checkIMAP      func(context.Context, *account.Account, string) error
+	checkCalDAV    func(context.Context, *account.Account, string) error
 	readPassword   func() (string, error)
 	confirm        func() (bool, error)
 }
@@ -53,7 +62,13 @@ type discoverer interface {
 }
 
 func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
-	c := &cli{stdout: stdout, stderr: stderr, discoverer: &account.Discoverer{}}
+	c := &cli{
+		stdout:      stdout,
+		stderr:      stderr,
+		discoverer:  &account.Discoverer{},
+		checkIMAP:   checkIMAP,
+		checkCalDAV: checkCalDAV,
+	}
 	c.readPassword = c.promptPassword
 	c.confirm = c.promptConfirm
 	// A missing home directory only matters to the commands that need it.
@@ -73,7 +88,7 @@ func (c *cli) run(ctx context.Context, args []string) int {
 	switch {
 	case args[0] == "account":
 		if c.store == nil {
-			return c.fail(errors.New("can't find the config directory, is HOME set?"))
+			return c.fail(errNoConfigDir)
 		}
 		return c.runAccount(ctx, args[1:])
 	case args[0] == "version" && len(args) == 1:
@@ -81,11 +96,8 @@ func (c *cli) run(ctx context.Context, args []string) int {
 			return 1
 		}
 		return 0
-	case args[0] == "serve" && len(args) == 1:
-		if err := serve(ctx, version, c.stderr); err != nil {
-			return c.fail(err)
-		}
-		return 0
+	case args[0] == "serve":
+		return c.runServe(ctx, args[1:], version)
 	default:
 		_, _ = fmt.Fprint(c.stderr, usage)
 		return 2
@@ -121,13 +133,54 @@ func (c *cli) promptPassword() (string, error) {
 	return string(password), nil
 }
 
+func (c *cli) runServe(ctx context.Context, args []string, version string) int {
+	readOnly, err := readOnlyFromEnv()
+	if err != nil {
+		return c.fail(err)
+	}
+	flags := flag.NewFlagSet("serve", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	flags.BoolVar(&readOnly, "read-only", readOnly, "")
+	if err := flags.Parse(args); err != nil || flags.NArg() != 0 {
+		_, _ = fmt.Fprint(c.stderr, usage)
+		return 2
+	}
+
+	options := mcpserver.Options{Version: version, ReadOnly: readOnly, Account: c.loadAccount}
+	if err := serve(ctx, options, c.stderr); err != nil {
+		return c.fail(err)
+	}
+	return 0
+}
+
+func (c *cli) loadAccount() (*account.Account, error) {
+	if c.store == nil {
+		return nil, errNoConfigDir
+	}
+	return c.store.Load()
+}
+
+// readOnlyFromEnv refuses a value it can't read, rather than guess which way
+// someone meant to set a safety switch.
+func readOnlyFromEnv() (bool, error) {
+	value := os.Getenv(readOnlyEnv)
+	if value == "" {
+		return false, nil
+	}
+	readOnly, err := strconv.ParseBool(value)
+	if err != nil {
+		return false, fmt.Errorf("%s must be 1 or 0, not %q", readOnlyEnv, value)
+	}
+	return readOnly, nil
+}
+
 // serve blocks until the client disconnects. Stdout belongs to the MCP
 // transport, so logs go to stderr.
-func serve(ctx context.Context, version string, stderr io.Writer) error {
+func serve(ctx context.Context, options mcpserver.Options, stderr io.Writer) error {
 	logger := slog.New(slog.NewTextHandler(stderr, nil))
-	logger.Info("starting server", "version", version)
+	logger.Info("starting server", "version", options.Version, "read_only", options.ReadOnly)
 
-	if err := mcpserver.New(version).Run(ctx, &mcp.StdioTransport{}); err != nil {
+	if err := mcpserver.New(options).Run(ctx, &mcp.StdioTransport{}); err != nil {
 		return fmt.Errorf("run server: %w", err)
 	}
 	return nil

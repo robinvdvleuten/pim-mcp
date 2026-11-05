@@ -152,6 +152,7 @@ func TestValidate(t *testing.T) {
 		{"CalDAV over HTTP on loopback", func(a *Account) { a.CalDAV.URL = "http://localhost:5232/" }, ""},
 		{"bad CalDAV URL", func(a *Account) { a.CalDAV.URL = "://" }, "CalDAV URL"},
 		{"CalDAV URL with no host", func(a *Account) { a.CalDAV.URL = "https:///dav" }, "CalDAV URL"},
+		{"CalDAV URL holding a password", func(a *Account) { a.CalDAV.URL = "https://me:secret@dav.example.org/" }, "CalDAV URL"},
 	}
 
 	for _, tt := range tests {

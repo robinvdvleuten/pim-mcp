@@ -76,6 +76,10 @@ func (a Account) Validate() error {
 	if err != nil || u.Hostname() == "" {
 		return errors.New("CalDAV URL must look like https://host/path")
 	}
+	// The config file holds no secrets, and account_info shows this URL.
+	if u.User != nil {
+		return errors.New("CalDAV URL must not contain a username or password")
+	}
 	return transport.CheckURL(u)
 }
 

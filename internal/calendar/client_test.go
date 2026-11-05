@@ -171,3 +171,46 @@ func TestUpdateWithoutETagIsRefused(t *testing.T) {
 		t.Errorf("sent %d requests, want none", requests)
 	}
 }
+
+func TestCheckLogin(t *testing.T) {
+	tests := []struct {
+		name    string
+		status  int
+		want    error
+		wantErr bool
+	}{
+		{name: "accepted", status: http.StatusMultiStatus},
+		{name: "wrong password", status: http.StatusUnauthorized, want: ErrLoginRefused, wantErr: true},
+		{name: "forbidden", status: http.StatusForbidden, want: ErrLoginRefused, wantErr: true},
+		{name: "a website, not a DAV server", status: http.StatusOK, wantErr: true},
+		{name: "server trouble", status: http.StatusInternalServerError, wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var method, user, password string
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				method = r.Method
+				user, password, _ = r.BasicAuth()
+				w.WriteHeader(tt.status)
+			}))
+			t.Cleanup(server.Close)
+			client, err := New(Config{URL: server.URL, Username: "me", Password: "secret"})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			err = client.CheckLogin(t.Context())
+
+			if (err != nil) != tt.wantErr {
+				t.Errorf("err = %v, want an error: %v", err, tt.wantErr)
+			}
+			if tt.want != nil && !errors.Is(err, tt.want) {
+				t.Errorf("err = %v, want %v", err, tt.want)
+			}
+			if method != "PROPFIND" || user != "me" || password != "secret" {
+				t.Errorf("request = %s as %q / %q", method, user, password)
+			}
+		})
+	}
+}

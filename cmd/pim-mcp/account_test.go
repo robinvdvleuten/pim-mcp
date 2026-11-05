@@ -55,6 +55,9 @@ type harness struct {
 	prompts        int
 	confirms       int
 	answer         bool
+
+	imapErr, caldavErr error
+	checkedPassword    string
 }
 
 func newHarness(t *testing.T) *harness {
@@ -67,6 +70,13 @@ func newHarness(t *testing.T) *harness {
 		stderr:     &h.stderr,
 		store:      account.NewStore(h.dir),
 		discoverer: &fakeDiscoverer{},
+		checkIMAP: func(context.Context, *account.Account, string) error {
+			return h.imapErr
+		},
+		checkCalDAV: func(_ context.Context, _ *account.Account, password string) error {
+			h.checkedPassword = password
+			return h.caldavErr
+		},
 		confirm: func() (bool, error) {
 			h.confirms++
 			return h.answer, nil
@@ -368,7 +378,7 @@ func TestAccountRemoveKeychainFailureIsReported(t *testing.T) {
 }
 
 func TestAccountCommandsWithoutAccount(t *testing.T) {
-	for _, command := range []string{"show", "remove"} {
+	for _, command := range []string{"show", "remove", "test"} {
 		t.Run(command, func(t *testing.T) {
 			h := newHarness(t)
 
@@ -564,5 +574,66 @@ func TestAccountAddISPDBFlag(t *testing.T) {
 				t.Errorf("useISPDB = %v, want %v", fake.useISPDB, tt.want)
 			}
 		})
+	}
+}
+
+func TestAccountTest(t *testing.T) {
+	refused := errors.New("login refused")
+	tests := []struct {
+		name               string
+		imapErr, caldavErr error
+		wantCode           int
+		wantLines          []string
+	}{
+		{name: "both work", wantCode: 0, wantLines: []string{"imap:   ok", "caldav: ok"}},
+		{name: "mail fails", imapErr: refused, wantCode: 1, wantLines: []string{"imap:   failed: login refused", "caldav: ok"}},
+		{name: "calendar fails", caldavErr: refused, wantCode: 1, wantLines: []string{"imap:   ok", "caldav: failed: login refused"}},
+		{name: "both fail", imapErr: refused, caldavErr: refused, wantCode: 1, wantLines: []string{"imap:   failed", "caldav: failed"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newHarness(t)
+			if code := h.run(addArgs...); code != 0 {
+				t.Fatalf("add: exit code = %d", code)
+			}
+			h.imapErr, h.caldavErr = tt.imapErr, tt.caldavErr
+
+			code := h.run("account", "test")
+
+			if code != tt.wantCode {
+				t.Errorf("exit code = %d, want %d", code, tt.wantCode)
+			}
+			for _, want := range tt.wantLines {
+				if !strings.Contains(h.stdout.String(), want) {
+					t.Errorf("output %q doesn't contain %q", h.stdout.String(), want)
+				}
+			}
+			if h.checkedPassword != testPassword {
+				t.Errorf("checked with password %q", h.checkedPassword)
+			}
+			if strings.Contains(h.stdout.String()+h.stderr.String(), testPassword) {
+				t.Error("output contains the password")
+			}
+		})
+	}
+}
+
+func TestAccountTestWithoutPassword(t *testing.T) {
+	h := newHarness(t)
+	if code := h.run(addArgs...); code != 0 {
+		t.Fatalf("add: exit code = %d", code)
+	}
+	if err := account.DeletePassword("me@example.org"); err != nil {
+		t.Fatal(err)
+	}
+
+	code := h.run("account", "test")
+
+	if code != 1 {
+		t.Errorf("exit code = %d, want 1", code)
+	}
+	if !strings.Contains(h.stderr.String(), account.PasswordEnv) {
+		t.Errorf("stderr = %q", h.stderr.String())
 	}
 }

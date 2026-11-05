@@ -14,8 +14,13 @@ import (
 	"github.com/robinvdvleuten/pim-mcp/internal/transport"
 )
 
-// ErrConflict means the event changed on the server since it was read.
-var ErrConflict = errors.New("conflict: event changed elsewhere, re-read it")
+// Errors callers can act on.
+var (
+	// ErrConflict means the event changed on the server since it was read.
+	ErrConflict = errors.New("conflict: event changed elsewhere, re-read it")
+	// ErrLoginRefused means the server turned down the username or password.
+	ErrLoginRefused = errors.New("login refused")
+)
 
 const maxRedirects = 10
 
@@ -69,6 +74,30 @@ func checkRedirect(req *http.Request, via []*http.Request) error {
 		return fmt.Errorf("stopped after %d redirects", maxRedirects)
 	}
 	return transport.CheckURL(req.URL)
+}
+
+// CheckLogin asks the server something that needs a login. Only a DAV answer
+// counts, so that a website at the URL doesn't pass for a calendar server.
+func (c *Client) CheckLogin(ctx context.Context) error {
+	req, err := c.newRequest(ctx, "PROPFIND", c.base.Path, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Depth", "0")
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("connect: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	switch resp.StatusCode {
+	case http.StatusMultiStatus:
+		return nil
+	case http.StatusUnauthorized, http.StatusForbidden:
+		return ErrLoginRefused
+	default:
+		return fmt.Errorf("not a CalDAV server: %s", resp.Status)
+	}
 }
 
 // Get returns the stored resource at path.

@@ -1,9 +1,38 @@
 // Package mcpserver exposes pim-mcp's capabilities as MCP tools.
 package mcpserver
 
-import "github.com/modelcontextprotocol/go-sdk/mcp"
+import (
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-// New returns the MCP server, reporting version to clients during initialize.
-func New(version string) *mcp.Server {
-	return mcp.NewServer(&mcp.Implementation{Name: "pim-mcp", Version: version}, nil)
+	"github.com/robinvdvleuten/pim-mcp/internal/account"
+)
+
+// Options configures the server.
+type Options struct {
+	// Version is reported to clients during initialize.
+	Version string
+	// Account returns the configured account. It runs on each call, so a user
+	// who adds an account while the server runs doesn't have to restart it, and
+	// an agent gets told how to add one instead of finding a server that won't
+	// start.
+	Account func() (*account.Account, error)
+	// ReadOnly keeps the server from changing anything.
+	ReadOnly bool
+}
+
+// Server holds what the tools share.
+type Server struct {
+	options Options
+}
+
+// New returns the MCP server.
+func New(options Options) *mcp.Server {
+	s := &Server{options: options}
+	server := mcp.NewServer(&mcp.Implementation{Name: "pim-mcp", Version: options.Version}, nil)
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "account_info",
+		Description: "Show the configured account's email address, username, server endpoints, and whether the server is read-only.",
+		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true},
+	}, s.accountInfo)
+	return server
 }

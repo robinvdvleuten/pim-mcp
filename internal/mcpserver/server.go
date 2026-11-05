@@ -3,10 +3,12 @@ package mcpserver
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"slices"
 	"time"
 
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/robinvdvleuten/pim-mcp/internal/account"
@@ -89,7 +91,24 @@ func addTool[In, Out any](s *Server, tool *mcp.Tool, handler mcp.ToolHandlerFor[
 	if s.options.Tools != nil && !slices.Contains(s.options.Tools, tool.Name) {
 		return
 	}
+	tool.InputSchema = inputSchema[In]()
 	mcp.AddTool(s.mcp, tool, handler)
+}
+
+// inputSchema gives optional parameters one type. Go's pointers and slices would
+// otherwise come out as ["null", "boolean"] and the like, which is valid but which
+// clients handle badly. An optional parameter is simply left out, never null.
+func inputSchema[In any]() *jsonschema.Schema {
+	schema, err := jsonschema.For[In](nil)
+	if err != nil {
+		panic(fmt.Sprintf("schema for %T: %v", *new(In), err))
+	}
+	for _, property := range schema.Properties {
+		if types := slices.DeleteFunc(property.Types, func(t string) bool { return t == "null" }); len(types) == 1 {
+			property.Type, property.Types = types[0], nil
+		}
+	}
+	return schema
 }
 
 func logRequests(logger *slog.Logger) mcp.Middleware {

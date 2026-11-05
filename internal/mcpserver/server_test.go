@@ -392,3 +392,34 @@ func TestCreateEventInputs(t *testing.T) {
 		})
 	}
 }
+
+// A type list such as ["null", "boolean"] is valid, but clients and models handle
+// it badly: some show no type at all.
+func TestToolParametersHaveOneType(t *testing.T) {
+	session := connect(t, New(Options{Version: "test"}))
+
+	result, err := session.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("list tools: %v", err)
+	}
+
+	for _, tool := range result.Tools {
+		data, err := json.Marshal(tool.InputSchema)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var schema struct {
+			Properties map[string]struct {
+				Type any `json:"type"`
+			} `json:"properties"`
+		}
+		if err := json.Unmarshal(data, &schema); err != nil {
+			t.Fatal(err)
+		}
+		for name, property := range schema.Properties {
+			if _, ok := property.Type.(string); !ok {
+				t.Errorf("%s.%s has type %v", tool.Name, name, property.Type)
+			}
+		}
+	}
+}

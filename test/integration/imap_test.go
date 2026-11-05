@@ -118,7 +118,7 @@ Content-Transfer-Encoding: base64
 const singlePartInvite = `From: Jan <jan@example.org>
 To: me@example.org
 Subject: Bare invite
-Date: Wed, 04 Nov 2026 10:00:00 +0100
+Date: Wed, 04 Nov 2026 09:00:00 +0100
 MIME-Version: 1.0
 Content-Type: text/calendar; charset=utf-8; method=REQUEST
 Content-Transfer-Encoding: quoted-printable

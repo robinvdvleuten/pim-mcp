@@ -228,7 +228,7 @@ func formatAddresses(addresses []imap.Address) []string {
 		switch {
 		case address.Addr() == "":
 			// A group's start or end marker holds no address.
-		case address.Name == "":
+		case address.Name == "" || strings.EqualFold(address.Name, address.Addr()):
 			formatted = append(formatted, address.Addr())
 		default:
 			formatted = append(formatted, address.Name+" <"+address.Addr()+">")

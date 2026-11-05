@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -49,12 +50,16 @@ func importSession(t *testing.T, user string, s caldavServer) *mcp.ClientSession
 	return session
 }
 
+var inviteMails atomic.Int64
+
 // inviteMail wraps calendar lines in a mail, the way mail clients send invites.
 func inviteMail(method string, components ...string) string {
 	lines := []string{"BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//t//t//EN", "METHOD:" + method}
 	lines = append(lines, components...)
 	lines = append(lines, "END:VCALENDAR")
-	return "From: Jan <jan@example.org>\nTo: me@example.org\nSubject: An invite\nDate: Wed, 04 Nov 2026 10:00:00 +0100\nMIME-Version: 1.0\n" +
+	// Each one later than the last, as tests read the newest message.
+	sent := time.Date(2026, 11, 4, 10, 0, 0, 0, time.UTC).Add(time.Duration(inviteMails.Add(1)) * time.Second)
+	return "From: Jan <jan@example.org>\nTo: me@example.org\nSubject: An invite\nDate: " + sent.Format(time.RFC1123Z) + "\nMIME-Version: 1.0\n" +
 		"Content-Type: multipart/mixed; boundary=\"b\"\n\n--b\nContent-Type: text/plain; charset=utf-8\n\nPlease come.\n--b\n" +
 		"Content-Type: text/calendar; charset=utf-8; method=" + method + "\n\n" + strings.Join(lines, "\n") + "\n--b--\n"
 }

@@ -1,9 +1,13 @@
 package mail
 
 import (
+	"slices"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
+
+	"github.com/emersion/go-imap/v2"
 )
 
 func TestBodyPart(t *testing.T) {
@@ -145,5 +149,35 @@ func TestDecodeIDRejectsForgeries(t *testing.T) {
 		if _, _, _, err := decodeID(id); err == nil {
 			t.Errorf("decodeID(%q) passed", id)
 		}
+	}
+}
+
+func TestFormatAddresses(t *testing.T) {
+	got := formatAddresses([]imap.Address{
+		{Name: "Jan", Mailbox: "jan", Host: "example.org"},
+		{Mailbox: "plain", Host: "example.org"},
+		{Name: "same@example.org", Mailbox: "same", Host: "example.org"},
+		{Name: "SHOUT@EXAMPLE.ORG", Mailbox: "shout", Host: "example.org"},
+		{Name: "Group start"},
+	})
+
+	want := []string{"Jan <jan@example.org>", "plain@example.org", "same@example.org", "shout@example.org"}
+	if !slices.Equal(got, want) {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestNewestFirst(t *testing.T) {
+	older := time.Date(2019, 1, 28, 10, 0, 0, 0, time.UTC)
+	// Later on the clock, but earlier in time.
+	newer := time.Date(2026, 11, 2, 9, 0, 0, 0, time.FixedZone("", 5*3600))
+	newest := time.Date(2026, 11, 2, 8, 0, 0, 0, time.UTC)
+	messages := []Summary{{Subject: "no date"}, {Subject: "older", Date: older}, {Subject: "newest", Date: newest}, {Subject: "newer", Date: newer}}
+
+	newestFirst(messages)
+
+	got := []string{messages[0].Subject, messages[1].Subject, messages[2].Subject, messages[3].Subject}
+	if !slices.Equal(got, []string{"newest", "newer", "older", "no date"}) {
+		t.Errorf("got %v", got)
 	}
 }

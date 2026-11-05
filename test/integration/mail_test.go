@@ -123,9 +123,9 @@ func TestMailSearchFilters(t *testing.T) {
 		args map[string]any
 		want []string
 	}{
-		{"nothing filtered, newest arrival first", map[string]any{}, []string{"Bare invite", "Project kickoff", "Budget review", "Lunch", "Budget 2027"}},
+		{"nothing filtered, newest date first", map[string]any{}, []string{"Budget review", "Lunch", "Project kickoff", "Bare invite", "Budget 2027"}},
 		{"subject", map[string]any{"subject": "budget"}, []string{"Budget review", "Budget 2027"}},
-		{"from", map[string]any{"from": "jan@"}, []string{"Bare invite", "Project kickoff", "Budget 2027"}},
+		{"from", map[string]any{"from": "jan@"}, []string{"Project kickoff", "Bare invite", "Budget 2027"}},
 		{"to", map[string]any{"to": "other@example.org"}, []string{"Lunch"}},
 		{"text in the body", map[string]any{"text": "noon"}, []string{"Lunch"}},
 		{"filters combine", map[string]any{"from": "piet", "subject": "budget"}, []string{"Budget review"}},
@@ -134,7 +134,7 @@ func TestMailSearchFilters(t *testing.T) {
 		{"before, exact to the moment", map[string]any{"subject": "budget", "before": "2026-11-06T08:30:00+01:00"}, []string{"Budget 2027"}},
 		{"before includes earlier the same day", map[string]any{"subject": "budget", "before": "2026-11-06T09:30:00+01:00"}, []string{"Budget review", "Budget 2027"}},
 		{"since as a plain date", map[string]any{"subject": "budget", "since": "2026-11-05"}, []string{"Budget review"}},
-		{"has a calendar part", map[string]any{"has_calendar": true}, []string{"Bare invite", "Project kickoff"}},
+		{"has a calendar part", map[string]any{"has_calendar": true}, []string{"Project kickoff", "Bare invite"}},
 		{"has no calendar part", map[string]any{"has_calendar": false}, []string{"Budget review", "Lunch", "Budget 2027"}},
 		{"no match", map[string]any{"subject": "nothing like this"}, []string{}},
 	}
@@ -181,7 +181,7 @@ func TestMailSearchSummary(t *testing.T) {
 func TestMailSearchLimit(t *testing.T) {
 	user := newMailbox(t)
 	for i := range 5 {
-		seed(t, user, plainMail(fmt.Sprintf("Message %d", i), "a@example.org", "b@example.org", "Mon, 02 Nov 2026 10:00:00 +0100", "x"))
+		seed(t, user, plainMail(fmt.Sprintf("Message %d", i), "a@example.org", "b@example.org", fmt.Sprintf("Mon, %02d Nov 2026 10:00:00 +0100", i+1), "x"))
 	}
 	session := mailSession(t, user)
 
@@ -210,11 +210,11 @@ func TestMailSearchLimit(t *testing.T) {
 }
 
 func TestMailSearchLimitAppliesAfterClientSideFilters(t *testing.T) {
-	// A later page of plain mail must not hide older invites.
+	// Newer plain mail must not hide an older invite.
 	user := newMailbox(t)
 	seed(t, user, multipartInvite)
 	for i := range 120 {
-		seed(t, user, plainMail(fmt.Sprintf("Noise %d", i), "a@example.org", "b@example.org", "Mon, 02 Nov 2026 10:00:00 +0100", "x"))
+		seed(t, user, plainMail(fmt.Sprintf("Noise %d", i), "a@example.org", "b@example.org", "Fri, 06 Nov 2026 10:00:00 +0100", "x"))
 	}
 	session := mailSession(t, user)
 
@@ -409,7 +409,7 @@ func TestMailSearchSaysSoWhenItStopsReading(t *testing.T) {
 	if err := raw.Login(user, dovecotPassword).Wait(); err != nil {
 		t.Fatal(err)
 	}
-	message := strings.ReplaceAll(plainMail("Noise", "a@example.org", "b@example.org", "Mon, 02 Nov 2026 10:00:00 +0100", "x"), "\n", "\r\n")
+	message := strings.ReplaceAll(plainMail("Noise", "a@example.org", "b@example.org", "Fri, 06 Nov 2026 10:00:00 +0100", "x"), "\n", "\r\n")
 	for range 2001 {
 		cmd := raw.Append("INBOX", int64(len(message)), nil)
 		if _, err := cmd.Write([]byte(message)); err != nil {
@@ -666,5 +666,30 @@ Content-Type: text/html; charset=utf-8
 
 	if strings.TrimSpace(got.Body) != "<p>See the log.</p>" || got.BodyType != "text/html" {
 		t.Errorf("body = %q, type %q", got.Body, got.BodyType)
+	}
+}
+
+// Mail moved or imported into a folder arrives out of date order. "Newest" has to
+// mean what the person reading the dates would say.
+func TestMailSearchOrdersByDateNotArrival(t *testing.T) {
+	user := newMailbox(t)
+	seed(t, user, plainMail("Written in 2026", "a@example.org", "b@example.org", "Mon, 02 Nov 2026 10:00:00 +0100", "x"))
+	seed(t, user, plainMail("Written in 2019", "a@example.org", "b@example.org", "Mon, 28 Jan 2019 10:00:00 +0100", "x"))
+	seed(t, user, plainMail("Written in 2021", "a@example.org", "b@example.org", "Mon, 04 Jan 2021 10:00:00 +0100", "x"))
+	session := mailSession(t, user)
+
+	got := callTool[mcpserver.SearchResult](t, session, "mail_search", map[string]any{"limit": 2})
+
+	if !slices.Equal(subjects(got), []string{"Written in 2026", "Written in 2021"}) {
+		t.Errorf("subjects = %v", subjects(got))
+	}
+	if !got.More {
+		t.Error("more = false")
+	}
+
+	got = callTool[mcpserver.SearchResult](t, session, "mail_search", map[string]any{"limit": 2, "has_calendar": false})
+
+	if !slices.Equal(subjects(got), []string{"Written in 2026", "Written in 2021"}) {
+		t.Errorf("when reading messages too: subjects = %v", subjects(got))
 	}
 }

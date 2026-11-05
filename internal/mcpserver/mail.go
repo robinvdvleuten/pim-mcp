@@ -46,7 +46,7 @@ func (s *Server) registerMail() {
 	}, s.mailListFolders)
 	addTool(s, &mcp.Tool{
 		Name: "mail_search",
-		Description: "Search one mail folder. Results are newest arrival first. " +
+		Description: "Search one mail folder. Results are newest first, by the date on the message. " +
 			"When more is true, more messages may match than are shown, so narrow the search.",
 		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true},
 	}, s.mailSearch)

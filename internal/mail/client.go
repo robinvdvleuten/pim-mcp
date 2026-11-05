@@ -104,8 +104,8 @@ type Summary struct {
 	HasCalendar bool      `json:"has_calendar"`
 }
 
-// SearchResult holds a page of messages, newest arrival first. More says that
-// more may match than are shown.
+// SearchResult holds a page of messages, newest date first. More says that more
+// may match than are shown.
 type SearchResult struct {
 	Messages []Summary `json:"messages"`
 	More     bool      `json:"more"`
@@ -206,7 +206,7 @@ func folderRole(mailbox *imap.ListData) string {
 	return ""
 }
 
-// Search returns messages matching criteria, newest arrival first. The server
+// Search returns messages matching criteria, newest date first. The server
 // narrows them down. Whether a message has a calendar part, and exact dates, can
 // only be told by reading the message, which happens here in batches.
 func (c *Client) Search(ctx context.Context, criteria Criteria) (*SearchResult, error) {
@@ -220,12 +220,10 @@ func (c *Client) Search(ctx context.Context, criteria Criteria) (*SearchResult, 
 	if err != nil {
 		return nil, err
 	}
-	data, err := c.imap.UIDSearch(criteria.serverCriteria(), nil).Wait()
+	uids, err := c.matchingUIDs(ctx, folder, criteria)
 	if err != nil {
-		return nil, fmt.Errorf("search %s: %w", folder, contextError(ctx, err))
+		return nil, err
 	}
-	uids := data.AllUIDs()
-	slices.SortFunc(uids, func(a, b imap.UID) int { return int(int64(b) - int64(a)) })
 
 	result := &SearchResult{Messages: []Summary{}}
 	batch := searchBatch
@@ -235,6 +233,7 @@ func (c *Client) Search(ctx context.Context, criteria Criteria) (*SearchResult, 
 		result.More = len(uids) > criteria.Limit
 		uids = uids[:min(len(uids), criteria.Limit)]
 	}
+reading:
 	for scanned := 0; len(uids) > 0; scanned += batch {
 		if scanned >= maxSearchScan {
 			result.More = true
@@ -250,7 +249,10 @@ func (c *Client) Search(ctx context.Context, criteria Criteria) (*SearchResult, 
 		if err != nil {
 			return nil, fmt.Errorf("read %s: %w", folder, contextError(ctx, err))
 		}
-		slices.SortFunc(messages, func(a, b *imapclient.FetchMessageBuffer) int { return int(int64(b.UID) - int64(a.UID)) })
+		// A server answers in its own order, so put them back in the one asked for.
+		slices.SortFunc(messages, func(a, b *imapclient.FetchMessageBuffer) int {
+			return slices.Index(page, a.UID) - slices.Index(page, b.UID)
+		})
 		for _, message := range messages {
 			summary := summarize(folder, validity, message)
 			if !criteria.matches(summary) {
@@ -258,12 +260,47 @@ func (c *Client) Search(ctx context.Context, criteria Criteria) (*SearchResult, 
 			}
 			if len(result.Messages) == criteria.Limit {
 				result.More = true
-				return result, nil
+				break reading
 			}
 			result.Messages = append(result.Messages, summary)
 		}
 	}
+	newestFirst(result.Messages)
 	return result, nil
+}
+
+// matchingUIDs asks the server for matches, newest date first if it can sort
+// (RFC 5256). Arrival order is the fallback: mail moved or imported into a folder
+// can arrive long after it was written, so such a server's page may not hold the
+// newest messages, though newestFirst still orders the page itself.
+func (c *Client) matchingUIDs(ctx context.Context, folder string, criteria Criteria) ([]imap.UID, error) {
+	if c.imap.Caps().Has(imap.CapSort) {
+		sorted, err := c.imap.UIDSort(&imapclient.SortOptions{
+			SearchCriteria: criteria.serverCriteria(),
+			SortCriteria:   []imapclient.SortCriterion{{Key: imapclient.SortKeyDate, Reverse: true}},
+		}).Wait()
+		if err != nil {
+			return nil, fmt.Errorf("search %s: %w", folder, contextError(ctx, err))
+		}
+		uids := make([]imap.UID, len(sorted))
+		for i, uid := range sorted {
+			uids[i] = imap.UID(uid)
+		}
+		return uids, nil
+	}
+	data, err := c.imap.UIDSearch(criteria.serverCriteria(), nil).Wait()
+	if err != nil {
+		return nil, fmt.Errorf("search %s: %w", folder, contextError(ctx, err))
+	}
+	uids := data.AllUIDs()
+	slices.SortFunc(uids, func(a, b imap.UID) int { return int(int64(b) - int64(a)) })
+	return uids, nil
+}
+
+// newestFirst keeps the order of messages with the same date, and puts those
+// without one last.
+func newestFirst(messages []Summary) {
+	slices.SortStableFunc(messages, func(a, b Summary) int { return b.Date.Compare(a.Date) })
 }
 
 // serverCriteria widens date bounds by a day each way, because IMAP compares

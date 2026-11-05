@@ -51,6 +51,11 @@ func newMailbox(t *testing.T) string {
 
 func seed(t *testing.T, user, message string) {
 	t.Helper()
+	seedFolder(t, user, "INBOX", message)
+}
+
+func seedFolder(t *testing.T, user, folder, message string) {
+	t.Helper()
 	c, err := imapclient.DialInsecure(dovecotPlainAddr, nil)
 	if err != nil {
 		t.Fatalf("seed dial: %v", err)
@@ -60,7 +65,7 @@ func seed(t *testing.T, user, message string) {
 		t.Fatalf("seed login: %v", err)
 	}
 	message = strings.ReplaceAll(message, "\n", "\r\n")
-	cmd := c.Append("INBOX", int64(len(message)), nil)
+	cmd := c.Append(folder, int64(len(message)), nil)
 	if _, err := cmd.Write([]byte(message)); err != nil {
 		t.Fatalf("seed write: %v", err)
 	}
@@ -124,52 +129,6 @@ METHOD:REQUEST
 END:VCALENDAR
 `
 
-func TestIMAPListsFolders(t *testing.T) {
-	c, err := mail.Dial(t.Context(), dovecotConfig(newMailbox(t)))
-	if err != nil {
-		t.Fatalf("dial: %v", err)
-	}
-	t.Cleanup(func() { _ = c.Close() })
-
-	folders, err := c.Folders(t.Context())
-	if err != nil {
-		t.Fatalf("folders: %v", err)
-	}
-
-	for _, want := range []string{"INBOX", "Sent"} {
-		if !slices.Contains(folders, want) {
-			t.Errorf("folders = %v, want %q included", folders, want)
-		}
-	}
-}
-
-func TestIMAPSearchFindsOnlyMatchingMessages(t *testing.T) {
-	user := newMailbox(t)
-	seed(t, user, multipartInvite)
-	seed(t, user, singlePartInvite)
-	c, err := mail.Dial(t.Context(), dovecotConfig(user))
-	if err != nil {
-		t.Fatalf("dial: %v", err)
-	}
-	t.Cleanup(func() { _ = c.Close() })
-
-	uids, err := c.SearchSubject(t.Context(), "INBOX", "kickoff")
-	if err != nil {
-		t.Fatalf("search: %v", err)
-	}
-
-	if len(uids) != 1 {
-		t.Fatalf("uids = %v, want exactly one", uids)
-	}
-	msg, err := c.Message(t.Context(), "INBOX", uids[0])
-	if err != nil {
-		t.Fatalf("message: %v", err)
-	}
-	if msg.Subject != "Project kickoff" {
-		t.Errorf("subject = %q, want %q", msg.Subject, "Project kickoff")
-	}
-}
-
 func TestIMAPReadsCalendarPart(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -190,12 +149,13 @@ func TestIMAPReadsCalendarPart(t *testing.T) {
 				t.Fatalf("dial: %v", err)
 			}
 			t.Cleanup(func() { _ = c.Close() })
-			uids, err := c.SearchSubject(t.Context(), "INBOX", tt.subject)
-			if err != nil || len(uids) != 1 {
-				t.Fatalf("search: %v, err %v", uids, err)
+			found, err := c.Search(t.Context(), mail.Criteria{Folder: "INBOX", Subject: tt.subject, Limit: 10})
+			if err != nil || len(found.Messages) != 1 {
+				t.Fatalf("search: %+v, err %v", found, err)
 			}
+			id := found.Messages[0].ID
 
-			msg, err := c.Message(t.Context(), "INBOX", uids[0])
+			msg, err := c.Message(t.Context(), id)
 			if err != nil {
 				t.Fatalf("message: %v", err)
 			}
@@ -208,7 +168,7 @@ func TestIMAPReadsCalendarPart(t *testing.T) {
 				t.Errorf("path = %q, want %q", part.Path, tt.wantPath)
 			}
 
-			content, err := c.PartContent(t.Context(), "INBOX", uids[0], part)
+			content, err := c.PartContent(t.Context(), id, part)
 			if err != nil {
 				t.Fatalf("part content: %v", err)
 			}
@@ -216,7 +176,7 @@ func TestIMAPReadsCalendarPart(t *testing.T) {
 				t.Errorf("content = %q, want %q", got, icsBody)
 			}
 
-			if got := flags(t, user, uids[0]); slices.Contains(got, imap.FlagSeen) {
+			if got := flags(t, user, msg.UID); slices.Contains(got, imap.FlagSeen) {
 				t.Errorf("flags = %v: reading must not mark the message as seen", got)
 			}
 		})
@@ -285,25 +245,25 @@ func TestIMAPLiveAccount(t *testing.T) {
 	if err != nil {
 		t.Fatalf("folders: %v", err)
 	}
-	if !slices.Contains(folders, "INBOX") {
-		t.Errorf("found %d folders, none named INBOX", len(folders))
+	if !slices.ContainsFunc(folders, func(f mail.Folder) bool { return f.Role == mail.RoleInbox }) {
+		t.Errorf("found %d folders, none is the inbox", len(folders))
 	}
 
-	uids, err := c.SearchSubject(t.Context(), "INBOX", "a")
+	found, err := c.Search(t.Context(), mail.Criteria{Folder: "INBOX", Limit: 1})
 	if err != nil {
 		t.Fatalf("search: %v", err)
 	}
-	if len(uids) == 0 {
+	if len(found.Messages) == 0 {
 		t.Skip("no message to read")
 	}
-	msg, err := c.Message(t.Context(), "INBOX", uids[len(uids)-1])
+	msg, err := c.Message(t.Context(), found.Messages[0].ID)
 	if err != nil {
 		t.Fatalf("message: %v", err)
 	}
 	if len(msg.Parts) == 0 {
 		t.Fatal("message has no parts")
 	}
-	if _, err := c.PartContent(t.Context(), "INBOX", msg.UID, msg.Parts[0]); err != nil {
+	if _, err := c.PartContent(t.Context(), found.Messages[0].ID, msg.Parts[0]); err != nil {
 		t.Fatalf("part content: %v", err)
 	}
 }

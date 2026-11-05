@@ -3,6 +3,7 @@ package mcpserver
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -10,6 +11,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/robinvdvleuten/pim-mcp/internal/account"
+	"github.com/robinvdvleuten/pim-mcp/internal/mail"
 )
 
 func connect(t *testing.T, server *mcp.Server) *mcp.ClientSession {
@@ -145,5 +147,50 @@ func TestAccountInfoReadsTheAccountOnEachCall(t *testing.T) {
 	configured = true
 	if second := callTool[AccountInfo](t, session, "account_info", nil); second.IsError {
 		t.Errorf("after adding: %s", errorText(second))
+	}
+}
+
+func TestMailSearchRefusesBadInputWithoutConnecting(t *testing.T) {
+	tests := map[string]map[string]any{
+		"limit too high":    {"limit": 51},
+		"negative limit":    {"limit": -1},
+		"bad since":         {"since": "tomorrow"},
+		"bad before":        {"before": "2026-13-45"},
+		"time without zone": {"since": "2026-11-05T09:00:00"},
+	}
+
+	for name, args := range tests {
+		t.Run(name, func(t *testing.T) {
+			var dials int
+			session := connect(t, New(Options{Version: "test", DialMail: func(context.Context) (*mail.Client, error) {
+				dials++
+				return nil, errors.New("must not connect")
+			}}))
+
+			result, err := session.CallTool(context.Background(), &mcp.CallToolParams{Name: "mail_search", Arguments: args})
+
+			if err == nil && !result.IsError {
+				t.Error("call succeeded")
+			}
+			if dials != 0 {
+				t.Errorf("connected %d times", dials)
+			}
+		})
+	}
+}
+
+func TestMailToolsReportConnectionFailure(t *testing.T) {
+	session := connect(t, New(Options{Version: "test", DialMail: func(context.Context) (*mail.Client, error) {
+		return nil, errors.New("no account configured")
+	}}))
+
+	for _, name := range []string{"mail_list_folders", "mail_search"} {
+		t.Run(name, func(t *testing.T) {
+			result := callTool[any](t, session, name, nil)
+
+			if !result.IsError || !strings.Contains(errorText(result), "no account configured") {
+				t.Errorf("error = %v, text = %q", result.IsError, errorText(result))
+			}
+		})
 	}
 }

@@ -2,9 +2,12 @@
 package mcpserver
 
 import (
+	"context"
+
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/robinvdvleuten/pim-mcp/internal/account"
+	"github.com/robinvdvleuten/pim-mcp/internal/mail"
 )
 
 // Options configures the server.
@@ -18,6 +21,8 @@ type Options struct {
 	Account func() (*account.Account, error)
 	// ReadOnly keeps the server from changing anything.
 	ReadOnly bool
+	// DialMail opens a logged-in mail connection, for one tool call.
+	DialMail func(context.Context) (*mail.Client, error)
 }
 
 // Server holds what the tools share.
@@ -34,5 +39,6 @@ func New(options Options) *mcp.Server {
 		Description: "Show the configured account's email address, username, server endpoints, and whether the server is read-only.",
 		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true},
 	}, s.accountInfo)
+	s.registerMail(server)
 	return server
 }

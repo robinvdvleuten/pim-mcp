@@ -221,16 +221,20 @@ func (c *cli) accountTest(ctx context.Context) int {
 }
 
 func checkIMAP(ctx context.Context, a *account.Account, password string) error {
-	client, err := mail.Dial(ctx, mail.Config{
-		Addr:     a.IMAP.Addr,
-		Security: mailSecurity(a.IMAP.Security),
-		Username: a.Username,
-		Password: password,
-	})
+	client, err := mail.Dial(ctx, mailConfig(a, password))
 	if err != nil {
 		return err
 	}
 	return client.Close()
+}
+
+func mailConfig(a *account.Account, password string) mail.Config {
+	return mail.Config{
+		Addr:     a.IMAP.Addr,
+		Security: mailSecurity(a.IMAP.Security),
+		Username: a.Username,
+		Password: password,
+	}
 }
 
 // mailSecurity falls through to TLS, the safest choice, on anything unknown.

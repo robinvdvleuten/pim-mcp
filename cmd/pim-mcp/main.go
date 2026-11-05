@@ -20,6 +20,7 @@ import (
 	"golang.org/x/term"
 
 	"github.com/robinvdvleuten/pim-mcp/internal/account"
+	"github.com/robinvdvleuten/pim-mcp/internal/mail"
 	"github.com/robinvdvleuten/pim-mcp/internal/mcpserver"
 )
 
@@ -146,7 +147,12 @@ func (c *cli) runServe(ctx context.Context, args []string, version string) int {
 		return 2
 	}
 
-	options := mcpserver.Options{Version: version, ReadOnly: readOnly, Account: c.loadAccount}
+	options := mcpserver.Options{
+		Version:  version,
+		ReadOnly: readOnly,
+		Account:  c.loadAccount,
+		DialMail: c.dialMail,
+	}
 	if err := serve(ctx, options, c.stderr); err != nil {
 		return c.fail(err)
 	}
@@ -158,6 +164,18 @@ func (c *cli) loadAccount() (*account.Account, error) {
 		return nil, errNoConfigDir
 	}
 	return c.store.Load()
+}
+
+func (c *cli) dialMail(ctx context.Context) (*mail.Client, error) {
+	a, err := c.loadAccount()
+	if err != nil {
+		return nil, err
+	}
+	password, _, err := account.Password(a.Email)
+	if err != nil {
+		return nil, err
+	}
+	return mail.Dial(ctx, mailConfig(a, password))
 }
 
 // readOnlyFromEnv refuses a value it can't read, rather than guess which way

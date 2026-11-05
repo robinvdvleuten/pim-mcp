@@ -20,6 +20,8 @@ var (
 	ErrConflict = errors.New("conflict: event changed elsewhere, re-read it")
 	// ErrLoginRefused means the server turned down the username or password.
 	ErrLoginRefused = errors.New("login refused")
+	// ErrEventNotFound means there is no event at that ID, or no longer.
+	ErrEventNotFound = errors.New("event not found, it may have been deleted")
 )
 
 const maxRedirects = 10
@@ -111,7 +113,11 @@ func (c *Client) Get(ctx context.Context, path string) (*Object, error) {
 		return nil, fmt.Errorf("get %s: %w", path, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
+	switch resp.StatusCode {
+	case http.StatusOK:
+	case http.StatusNotFound:
+		return nil, fmt.Errorf("get %s: %w", path, ErrEventNotFound)
+	default:
 		return nil, fmt.Errorf("get %s: %s", path, resp.Status)
 	}
 	data, err := io.ReadAll(resp.Body)
@@ -134,6 +140,35 @@ func (c *Client) Update(ctx context.Context, path, etag string, data []byte) (st
 		return "", fmt.Errorf("update %s: an etag is required", path)
 	}
 	return c.put(ctx, path, data, "If-Match", `"`+etag+`"`)
+}
+
+// Delete removes the resource at path if it still has the given ETag. It returns
+// ErrConflict if the resource has changed.
+func (c *Client) Delete(ctx context.Context, path, etag string) error {
+	if etag == "" {
+		return fmt.Errorf("delete %s: an etag is required", path)
+	}
+	req, err := c.newRequest(ctx, http.MethodDelete, path, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("If-Match", `"`+etag+`"`)
+	req.Header.Set("Schedule-Reply", "F")
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("delete %s: %w", path, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	switch {
+	case resp.StatusCode == http.StatusPreconditionFailed:
+		return fmt.Errorf("delete %s: %w", path, ErrConflict)
+	case resp.StatusCode == http.StatusNotFound:
+		return fmt.Errorf("delete %s: %w", path, ErrEventNotFound)
+	case resp.StatusCode/100 != 2:
+		return fmt.Errorf("delete %s: %s", path, resp.Status)
+	}
+	return nil
 }
 
 func (c *Client) put(ctx context.Context, path string, data []byte, precondition, value string) (string, error) {

@@ -591,3 +591,143 @@ func TestCreateEventOnReadOnlyCalendarIsRefused(t *testing.T) {
 		t.Errorf("created an event on a read-only calendar: %s", toolText(result))
 	}
 }
+
+func createWeekly(t *testing.T, c *calendar.Client, s caldavServer) (path, uid string) {
+	t.Helper()
+	return createEvent(t, c, s,
+		"BEGIN:VEVENT", "UID:@", "DTSTAMP:20261101T120000Z", "DTSTART;TZID=Europe/Amsterdam:20300107T100000",
+		"DTEND;TZID=Europe/Amsterdam:20300107T110000", "RRULE:FREQ=WEEKLY;COUNT=3", "SUMMARY:Weekly", "END:VEVENT",
+		"BEGIN:VEVENT", "UID:@", "DTSTAMP:20261101T120000Z", "RECURRENCE-ID;TZID=Europe/Amsterdam:20300114T100000",
+		"DTSTART;TZID=Europe/Amsterdam:20300114T100000", "DTEND;TZID=Europe/Amsterdam:20300114T110000", "SUMMARY:Special", "END:VEVENT")
+}
+
+func seriesOf(t *testing.T, c *calendar.Client, s caldavServer, uid string) []calendar.Event {
+	t.Helper()
+	got, err := c.Events(t.Context(), []string{s.calendar},
+		time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC), time.Date(2030, 2, 1, 0, 0, 0, 0, time.UTC), time.UTC)
+	if err != nil {
+		t.Fatalf("events: %v", err)
+	}
+	return eventsOf(got.Events, uid)
+}
+
+func TestCalendarUpdateSeriesKeepsOverrides(t *testing.T) {
+	eachCalDAVServer(t, func(t *testing.T, s caldavServer, c *calendar.Client) {
+		path, uid := createWeekly(t, c, s)
+		events := seriesOf(t, c, s, uid)
+		session := calendarSession(t, s)
+
+		updated := callTool[calendar.UpdatedEvent](t, session, "calendar_update_event", map[string]any{
+			"event_id": path, "etag": events[0].ETag, "scope": "series", "summary": "Renamed, with a comma",
+		})
+
+		if updated.ETag == "" || updated.ETag == events[0].ETag {
+			t.Errorf("etag = %q, was %q", updated.ETag, events[0].ETag)
+		}
+		got := seriesOf(t, c, s, uid)
+		want := []string{"Renamed, with a comma", "Special", "Renamed, with a comma"}
+		if len(got) != len(want) {
+			t.Fatalf("events = %+v", got)
+		}
+		for i := range want {
+			if got[i].Summary != want[i] {
+				t.Errorf("event %d = %q, want %q", i, got[i].Summary, want[i])
+			}
+		}
+		if got[0].ETag != updated.ETag {
+			t.Errorf("etag from a read = %q, from the update = %q", got[0].ETag, updated.ETag)
+		}
+	})
+}
+
+// A second client edits the event between our read and our write, the case the
+// whole design is about.
+func TestCalendarWritesNeverOverwriteAnotherClient(t *testing.T) {
+	eachCalDAVServer(t, func(t *testing.T, s caldavServer, c *calendar.Client) {
+		tests := []struct {
+			tool string
+			args map[string]any
+		}{
+			{"calendar_update_event", map[string]any{"scope": "series", "summary": "From the agent"}},
+			{"calendar_delete_event", map[string]any{"scope": "series"}},
+		}
+		for _, tt := range tests {
+			t.Run(tt.tool, func(t *testing.T) {
+				path, uid := createWeekly(t, c, s)
+				stale := seriesOf(t, c, s, uid)[0].ETag
+				// The phone.
+				phone, err := c.Get(t.Context(), path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				edited := strings.Replace(string(phone.Data), "SUMMARY:Weekly", "SUMMARY:From the phone", 1)
+				if _, err := c.Update(t.Context(), path, phone.ETag, []byte(edited)); err != nil {
+					t.Fatalf("phone: %v", err)
+				}
+				session := calendarSession(t, s)
+				args := map[string]any{"event_id": path, "etag": stale}
+				for k, v := range tt.args {
+					args[k] = v
+				}
+
+				result, err := session.CallTool(t.Context(), &mcp.CallToolParams{Name: tt.tool, Arguments: args})
+				if err != nil {
+					t.Fatal(err)
+				}
+
+				if !result.IsError || !strings.Contains(toolText(result), "conflict") {
+					t.Errorf("result = %v: %s", result.IsError, toolText(result))
+				}
+				now, err := c.Get(t.Context(), path)
+				if err != nil {
+					t.Fatalf("the event is gone: %v", err)
+				}
+				if !strings.Contains(string(now.Data), "From the phone") {
+					t.Errorf("stored %s", now.Data)
+				}
+			})
+		}
+	})
+}
+
+func TestCalendarDeleteSeries(t *testing.T) {
+	eachCalDAVServer(t, func(t *testing.T, s caldavServer, c *calendar.Client) {
+		path, uid := createWeekly(t, c, s)
+		events := seriesOf(t, c, s, uid)
+		session := calendarSession(t, s)
+
+		callTool[calendar.DeletedEvent](t, session, "calendar_delete_event", map[string]any{
+			"event_id": path, "etag": events[0].ETag, "scope": "series",
+		})
+
+		if got := seriesOf(t, c, s, uid); len(got) != 0 {
+			t.Errorf("events = %+v", got)
+		}
+		if _, err := c.Get(t.Context(), path); !errors.Is(err, calendar.ErrEventNotFound) {
+			t.Errorf("get: %v, want ErrEventNotFound", err)
+		}
+	})
+}
+
+func TestCalendarUpdateMovesSeriesWithItsExceptions(t *testing.T) {
+	eachCalDAVServer(t, func(t *testing.T, s caldavServer, c *calendar.Client) {
+		path, uid := createWeekly(t, c, s)
+		events := seriesOf(t, c, s, uid)
+		session := calendarSession(t, s)
+
+		callTool[calendar.UpdatedEvent](t, session, "calendar_update_event", map[string]any{
+			"event_id": path, "etag": events[0].ETag, "scope": "series",
+			"start": "2030-01-07T15:00", "timezone": "Europe/Amsterdam",
+		})
+
+		got := seriesOf(t, c, s, uid)
+		if len(got) != 3 {
+			t.Fatalf("events = %+v", got)
+		}
+		for i, want := range []string{"Weekly", "Special", "Weekly"} {
+			if got[i].Summary != want || got[i].Start.Format("15:04") != "15:00" {
+				t.Errorf("event %d = %q at %s", i, got[i].Summary, got[i].Start.Format(time.RFC3339))
+			}
+		}
+	})
+}

@@ -62,3 +62,71 @@ func midnight(day time.Time, loc *time.Location) time.Time {
 	year, month, date := day.Date()
 	return time.Date(year, month, date, 0, 0, 0, 0, loc)
 }
+
+// How much of a recurring event a change applies to.
+const (
+	ScopeSeries     = "series"
+	ScopeOccurrence = "occurrence"
+)
+
+// UpdatedEvent reports a change. First is the event's first occurrence, for
+// showing the result, and is empty if it has none left.
+type UpdatedEvent struct {
+	EventID string           `json:"event_id"`
+	ETag    string           `json:"etag"`
+	First   *ical.Occurrence `json:"first_occurrence,omitempty"`
+}
+
+// DeletedEvent reports a removal. ETag is set when an occurrence was removed and
+// the rest of its series remains.
+type DeletedEvent struct {
+	EventID string `json:"event_id"`
+	ETag    string `json:"etag,omitempty"`
+	Deleted string `json:"deleted"`
+}
+
+// UpdateEvent changes a stored event, if it is still the one the caller read. The
+// server's copy decides what the change applies to, and checking the ETag up
+// front means a stale caller finds out before anything is computed from it.
+func (c *Client) UpdateEvent(ctx context.Context, eventID, etag, scope, _ string, patch ical.EventPatch, loc *time.Location) (*UpdatedEvent, error) {
+	if etag == "" {
+		return nil, fmt.Errorf("update %s: an etag is required", eventID)
+	}
+	if scope != ScopeSeries {
+		return nil, fmt.Errorf("scope must be %s", ScopeSeries)
+	}
+	object, err := c.Get(ctx, eventID)
+	if err != nil {
+		return nil, err
+	}
+	if object.ETag != etag {
+		return nil, fmt.Errorf("update %s: %w", eventID, ErrConflict)
+	}
+	data, err := ical.EditSeries(object.Data, patch, loc, time.Now())
+	if err != nil {
+		return nil, err
+	}
+	newETag, err := c.Update(ctx, eventID, etag, data)
+	if err != nil {
+		return nil, err
+	}
+	first, err := ical.FirstOccurrence(data, loc)
+	if err != nil {
+		return nil, err
+	}
+	return &UpdatedEvent{EventID: eventID, ETag: newETag, First: first}, nil
+}
+
+// DeleteEvent removes a stored event, if it is still the one the caller read.
+func (c *Client) DeleteEvent(ctx context.Context, eventID, etag, scope, _ string) (*DeletedEvent, error) {
+	if etag == "" {
+		return nil, fmt.Errorf("delete %s: an etag is required", eventID)
+	}
+	if scope != ScopeSeries {
+		return nil, fmt.Errorf("scope must be %s", ScopeSeries)
+	}
+	if err := c.Delete(ctx, eventID, etag); err != nil {
+		return nil, err
+	}
+	return &DeletedEvent{EventID: eventID, Deleted: ScopeSeries}, nil
+}

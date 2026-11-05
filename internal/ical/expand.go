@@ -78,6 +78,35 @@ func Expand(cal *goical.Calendar, start, end time.Time, loc *time.Location) ([]O
 	return occurrences, nil
 }
 
+// FirstOccurrence returns the earliest occurrence of the event stored in data, or
+// nil if it has none. Looking widens from a day to a year, because a tight range
+// can't hit the cap on occurrences while a year can.
+func FirstOccurrence(data []byte, loc *time.Location) (*Occurrence, error) {
+	cal, err := Parse(data)
+	if err != nil {
+		return nil, err
+	}
+	z := newZones(cal, loc)
+	for _, s := range groupSeries(cal.Events()) {
+		for _, event := range append(slices.Clone(s.masters), s.overrides...) {
+			_, start, _, err := readEvent(z, event)
+			if err != nil {
+				return nil, err
+			}
+			for _, days := range []int{1, 366} {
+				occurrences, err := Expand(cal, start, start.AddDate(0, 0, days), loc)
+				if err != nil {
+					return nil, err
+				}
+				if len(occurrences) > 0 {
+					return &occurrences[0], nil
+				}
+			}
+		}
+	}
+	return nil, nil
+}
+
 // series holds the VEVENTs that share a UID: normally one master with its
 // rule, plus an override per changed instance. Invites to a single instance
 // arrive as overrides with no master.

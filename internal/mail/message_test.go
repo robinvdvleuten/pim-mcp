@@ -125,6 +125,10 @@ func TestDecode(t *testing.T) {
 		{"base64 with line breaks", "aGVs\r\nbG8=\r\n", "base64", "hello"},
 		{"upper case name", "aGVsbG8=", "BASE64", "hello"},
 		{"quoted-printable", "caf=C3=A9=\r\n!", "quoted-printable", "café!"},
+		{"base64 with stray characters, which RFC 2045 says to ignore", "aGV s\tbG8=\r\n!", "base64", "hello"},
+		{"base64 glued together from separately padded pieces", "aGk=\r\nYWI=\r\nYw==", "base64", "hiabc"},
+		{"base64 with no padding", "aGVsbG8", "base64", "hello"},
+		{"empty base64", "\r\n", "base64", ""},
 	}
 
 	for _, tt := range tests {
@@ -179,5 +183,12 @@ func TestNewestFirst(t *testing.T) {
 	got := []string{messages[0].Subject, messages[1].Subject, messages[2].Subject, messages[3].Subject}
 	if !slices.Equal(got, []string{"newest", "newer", "older", "no date"}) {
 		t.Errorf("got %v", got)
+	}
+}
+
+func TestDecodeRefusesBase64ThatCannotBeRead(t *testing.T) {
+	// One leftover character holds too few bits to be a byte.
+	if got, err := decode([]byte("aGVsb"), "base64"); err == nil {
+		t.Errorf("got %q, want an error", got)
 	}
 }

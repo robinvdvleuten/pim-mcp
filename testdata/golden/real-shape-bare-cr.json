@@ -1,0 +1,16 @@
+[
+  {
+    "uid": "20270301T100000Z-parcel@example.org",
+    "occurrence_id": "",
+    "summary": "Parcel delivery",
+    "start": "2027-03-01T10:30:00Z",
+    "end": "2027-03-01T11:30:00Z",
+    "all_day": false,
+    "timezone": "UTC",
+    "location": "",
+    "description": "",
+    "recurring": false,
+    "status": "confirmed",
+    "organizer": ""
+  }
+]

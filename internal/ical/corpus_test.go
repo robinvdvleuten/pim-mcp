@@ -25,6 +25,9 @@ var corpus = []struct {
 	{"nextcloud-event", "2027-09-01T00:00:00Z", "2027-10-01T00:00:00Z", "UTC"},
 	{"thunderbird-event", "2027-10-05T00:00:00Z", "2027-10-06T00:00:00Z", "UTC"},
 	{"sloppy-generator", "2027-08-01T00:00:00Z", "2027-08-02T00:00:00Z", "UTC"},
+	{"real-shape-bare-cr", "2027-03-01T00:00:00Z", "2027-03-02T00:00:00Z", "UTC"},
+	{"real-shape-bom", "2027-03-02T00:00:00Z", "2027-03-03T00:00:00Z", "UTC"},
+	{"real-shape-empty-vtimezone", "2027-03-03T00:00:00Z", "2027-03-04T00:00:00Z", "UTC"},
 }
 
 func readFixture(t *testing.T, name string) ([]byte, string) {

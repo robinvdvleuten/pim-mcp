@@ -103,7 +103,6 @@ func TestParseInviteRefusals(t *testing.T) {
 	tests := map[string][]byte{
 		"not iCalendar": []byte("hello"),
 		"no events":     inviteOf("PUBLISH"),
-		"no UID":        inviteOf("PUBLISH", "BEGIN:VEVENT\r\nDTSTAMP:20261001T120000Z\r\nDTSTART:20261110T090000Z\r\nEND:VEVENT"),
 		"no start":      inviteOf("PUBLISH", veventLines("one", "SUMMARY:x")),
 		"unknown zone":  inviteOf("PUBLISH", veventLines("one", "DTSTART;TZID=Mars/Olympus:20261110T090000")),
 	}
@@ -330,6 +329,99 @@ func TestCancelledOccurrences(t *testing.T) {
 
 			if whole != tt.wantWhole || strings.Join(ids, " ") != strings.Join(tt.wantIDs, " ") {
 				t.Errorf("whole = %v, ids = %v", whole, ids)
+			}
+		})
+	}
+}
+
+func TestParseSaysWhenThereIsNoCalendar(t *testing.T) {
+	for name, data := range map[string]string{"empty": "", "only whitespace": "\r\n \r\n"} {
+		t.Run(name, func(t *testing.T) {
+			_, err := Parse([]byte(data))
+
+			if !errors.Is(err, ErrNoCalendarData) {
+				t.Errorf("err = %v, want ErrNoCalendarData", err)
+			}
+		})
+	}
+}
+
+func noUIDEvent(summary string) string {
+	return "BEGIN:VEVENT\r\nDTSTAMP:20261001T120000Z\r\nDTSTART:20261110T090000Z\r\nSUMMARY:" + summary + "\r\nEND:VEVENT"
+}
+
+func TestParseInviteGivesAnEventWithoutUIDAStableOne(t *testing.T) {
+	first, err := ParseInvite(inviteOf("PUBLISH", noUIDEvent("Haircut")), time.UTC)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	// The same invite again, generated later: importing it mustn't add a second copy.
+	again := strings.Replace(string(inviteOf("PUBLISH", noUIDEvent("Haircut"))), "DTSTAMP:20261001", "DTSTAMP:20261002", 1)
+	second, err := ParseInvite([]byte(again), time.UTC)
+	if err != nil {
+		t.Fatalf("parse again: %v", err)
+	}
+
+	uid := first.Events[0].UID
+	if uid == "" || second.Events[0].UID != uid {
+		t.Errorf("uids = %q and %q", uid, second.Events[0].UID)
+	}
+	stored, err := first.Storable(uid)
+	if err != nil {
+		t.Fatalf("storable: %v", err)
+	}
+	if !strings.Contains(string(stored), "UID:"+uid) {
+		t.Errorf("stored without its UID:\n%s", stored)
+	}
+}
+
+func TestParseInviteKeepsEventsWithoutUIDApart(t *testing.T) {
+	got, err := ParseInvite(inviteOf("PUBLISH", noUIDEvent("One"), noUIDEvent("Other")), time.UTC)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	if len(got.Events) != 2 || got.Events[0].UID == got.Events[1].UID {
+		t.Errorf("events = %+v", got.Events)
+	}
+}
+
+// go-ical won't write anything its encoder calls invalid, and real invites break
+// every one of these rules. Storing one has to work anyway.
+func TestStorableRepairsWhatTheEncoderWouldRefuse(t *testing.T) {
+	event := func(lines ...string) string {
+		return veventLines("one", append([]string{"DTSTART:20261110T090000Z", "SUMMARY:First"}, lines...)...)
+	}
+	emptyZone := "BEGIN:VTIMEZONE\r\nTZID:Nowhere\r\nEND:VTIMEZONE"
+	badZone := "BEGIN:VTIMEZONE\r\nTZID:Nowhere\r\nBEGIN:STANDARD\r\nDTSTART:19700101T000000\r\nEND:STANDARD\r\nEND:VTIMEZONE"
+	noProductID := "BEGIN:VCALENDAR\r\nVERSION:2.0\r\n" + event() + "\r\nEND:VCALENDAR\r\n"
+	noVersion := "BEGIN:VCALENDAR\r\nPRODID:x\r\n" + event() + "\r\nEND:VCALENDAR\r\n"
+	noStamp := "BEGIN:VEVENT\r\nUID:one\r\nDTSTART:20261110T090000Z\r\nSUMMARY:First\r\nEND:VEVENT"
+
+	tests := map[string]struct {
+		data    []byte
+		want    string
+		notWant string
+	}{
+		"no PRODID":                   {[]byte(noProductID), "PRODID:", ""},
+		"no VERSION":                  {[]byte(noVersion), "VERSION:2.0", ""},
+		"no DTSTAMP":                  {inviteOf("PUBLISH", noStamp), "DTSTAMP:", ""},
+		"two summaries":               {inviteOf("PUBLISH", event("SUMMARY:Second")), "SUMMARY:First", "SUMMARY:Second"},
+		"DTEND and DURATION":          {inviteOf("PUBLISH", event("DTEND:20261110T100000Z", "DURATION:PT5H")), "DTEND:", "DURATION"},
+		"a zone that says nothing":    {inviteOf("PUBLISH", emptyZone, event()), "SUMMARY:First", "Nowhere"},
+		"a zone with no offsets":      {inviteOf("PUBLISH", badZone, event()), "SUMMARY:First", "Nowhere"},
+		"a component inside an event": {inviteOf("PUBLISH", event("BEGIN:X-THING", "A:b", "END:X-THING")), "SUMMARY:First", "X-THING"},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			out := storable(t, tt.data, "one")
+
+			if !strings.Contains(out, tt.want) {
+				t.Errorf("%q is missing:\n%s", tt.want, out)
+			}
+			if tt.notWant != "" && strings.Contains(out, tt.notWant) {
+				t.Errorf("%q is still there:\n%s", tt.notWant, out)
 			}
 		})
 	}

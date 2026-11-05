@@ -4,7 +4,9 @@ package ical
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 
@@ -31,13 +33,29 @@ type Occurrence struct {
 	Transparent bool `json:"-"`
 }
 
+// ErrNoCalendarData means the data ended before any calendar began.
+var ErrNoCalendarData = errors.New("parse iCalendar: there is no calendar in this data")
+
 // Parse decodes a single iCalendar object.
 func Parse(data []byte) (*goical.Calendar, error) {
-	cal, err := goical.NewDecoder(bytes.NewReader(data)).Decode()
+	cal, err := goical.NewDecoder(bytes.NewReader(cleanLines(data))).Decode()
+	if errors.Is(err, io.EOF) {
+		return nil, ErrNoCalendarData
+	}
 	if err != nil {
 		return nil, fmt.Errorf("parse iCalendar: %w", err)
 	}
 	return cal, nil
+}
+
+// lineEndings turns every kind of line ending into one the decoder reads. A real
+// parcel service ends its lines with a bare carriage return.
+var lineEndings = strings.NewReplacer("\r\n", "\n", "\r", "\n")
+
+// cleanLines repairs what real invites get wrong before any parsing can start. A
+// byte order mark, which a real car rental service sends, would hide BEGIN.
+func cleanLines(data []byte) []byte {
+	return []byte(lineEndings.Replace(string(bytes.TrimPrefix(data, []byte("\xef\xbb\xbf")))))
 }
 
 // eventTemplate holds what all occurrences of an event have in common.

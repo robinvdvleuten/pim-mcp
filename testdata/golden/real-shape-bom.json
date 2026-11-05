@@ -1,0 +1,16 @@
+[
+  {
+    "uid": "rental@example.org",
+    "occurrence_id": "",
+    "summary": "Car rental",
+    "start": "2027-03-02T09:00:00Z",
+    "end": "2027-03-02T17:00:00Z",
+    "all_day": false,
+    "timezone": "UTC",
+    "location": "",
+    "description": "",
+    "recurring": false,
+    "status": "confirmed",
+    "organizer": ""
+  }
+]

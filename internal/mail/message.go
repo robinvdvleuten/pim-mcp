@@ -30,6 +30,8 @@ var (
 	ErrMessageTooLarge = errors.New("over the 25 MiB limit")
 	// ErrNoCalendarPart means a message holds no calendar invite.
 	ErrNoCalendarPart = errors.New("this message has no calendar part")
+	// ErrEmptyCalendarPart means a message's calendar part holds nothing.
+	ErrEmptyCalendarPart = errors.New("this message's calendar part is empty")
 	// ErrCalendarPartTooLarge means an invite is bigger than any real one.
 	ErrCalendarPartTooLarge = errors.New("the calendar part is over the 1 MiB limit")
 )
@@ -130,17 +132,29 @@ func (c *Client) Read(ctx context.Context, id string) (*Content, error) {
 
 // CalendarPart returns a message's invite as UTF-8. If a message has several
 // calendar parts, such as the same invite as text and as an attachment, the
-// first is used, which RFC 6047 makes the one meant for reading.
+// first that can be read is used.
 func (c *Client) CalendarPart(ctx context.Context, id string) ([]byte, error) {
 	message, err := c.Message(ctx, id)
 	if err != nil {
 		return nil, err
 	}
-	i := slices.IndexFunc(message.Parts, Part.isCalendar)
-	if i < 0 {
-		return nil, ErrNoCalendarPart
+	lastErr := ErrNoCalendarPart
+	for _, part := range message.Parts {
+		if !part.isCalendar() {
+			continue
+		}
+		data, err := c.calendarPartText(ctx, id, part)
+		if err == nil {
+			return data, nil
+		}
+		lastErr = err
 	}
-	part := message.Parts[i]
+	return nil, lastErr
+}
+
+// calendarPartText reads one calendar part. An empty one counts as a failure, so
+// that a message sending the same invite in two forms can still use the other.
+func (c *Client) calendarPartText(ctx context.Context, id string, part Part) ([]byte, error) {
 	if part.Size > maxCalendarPartBytes {
 		return nil, ErrCalendarPartTooLarge
 	}
@@ -150,6 +164,9 @@ func (c *Client) CalendarPart(ctx context.Context, id string) ([]byte, error) {
 	}
 	if len(raw) > maxCalendarPartBytes {
 		return nil, ErrCalendarPartTooLarge
+	}
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return nil, ErrEmptyCalendarPart
 	}
 	return []byte(bodyText(raw, part.charset)), nil
 }
@@ -276,11 +293,43 @@ func joinPath(path []int) string {
 	return strings.Join(parts, ".")
 }
 
+// decodeBase64 is as forgiving as RFC 2045 asks: anything outside the alphabet is
+// skipped. Mail generators also glue separately encoded pieces together, each with
+// its own padding, so padding ends a piece rather than the data.
+func decodeBase64(raw []byte) ([]byte, error) {
+	var out []byte
+	var piece []byte
+	flush := func() error {
+		decoded := make([]byte, base64.RawStdEncoding.DecodedLen(len(piece)))
+		n, err := base64.RawStdEncoding.Decode(decoded, piece)
+		if err != nil {
+			return err
+		}
+		out = append(out, decoded[:n]...)
+		piece = piece[:0]
+		return nil
+	}
+	for _, c := range raw {
+		switch {
+		case c == '=':
+			if err := flush(); err != nil {
+				return nil, err
+			}
+		case c >= 'A' && c <= 'Z', c >= 'a' && c <= 'z', c >= '0' && c <= '9', c == '+', c == '/':
+			piece = append(piece, c)
+		}
+	}
+	if err := flush(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func decode(raw []byte, encoding string) ([]byte, error) {
 	reader := bytes.NewReader(raw)
 	switch strings.ToLower(encoding) {
 	case "base64":
-		return io.ReadAll(base64.NewDecoder(base64.StdEncoding, reader))
+		return decodeBase64(raw)
 	case "quoted-printable":
 		return io.ReadAll(quotedprintable.NewReader(reader))
 	case "", "7bit", "8bit", "binary":

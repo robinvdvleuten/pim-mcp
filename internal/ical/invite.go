@@ -1,6 +1,8 @@
 package ical
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"slices"
@@ -54,11 +56,9 @@ func ParseInvite(data []byte, loc *time.Location) (*Invite, error) {
 		return nil, fmt.Errorf("%w: its method is %s", ErrUnsupportedMethod, method)
 	}
 
+	fillMissingUIDs(cal)
 	invite := &Invite{Method: method, cal: cal}
 	for _, s := range groupSeries(cal.Events()) {
-		if s.uid == "" {
-			return nil, errors.New("an event in this invite has no UID")
-		}
 		event := InviteEvent{UID: s.uid, Sequence: seriesSequence(s)}
 		single := calendarOfSeries(cal, s)
 		encoded, err := encode(single)
@@ -74,6 +74,24 @@ func ParseInvite(data []byte, loc *time.Location) (*Invite, error) {
 		return nil, errors.New("this invite has no events")
 	}
 	return invite, nil
+}
+
+// fillMissingUIDs gives an event without a UID one made from what it says, which a
+// real hair salon's invites need. It leaves out DTSTAMP, which changes each time an
+// invite is generated, so importing the same one twice still finds the first copy.
+func fillMissingUIDs(cal *goical.Calendar) {
+	for _, event := range cal.Events() {
+		if text(&event, goical.PropUID) != "" {
+			continue
+		}
+		hash := sha256.New()
+		for _, name := range []string{goical.PropDateTimeStart, goical.PropDateTimeEnd, goical.PropSummary, goical.PropLocation, goical.PropOrganizer} {
+			if prop := event.Props.Get(name); prop != nil {
+				_, _ = fmt.Fprintf(hash, "%s=%s\n", name, prop.Value)
+			}
+		}
+		event.Props.SetText(goical.PropUID, hex.EncodeToString(hash.Sum(nil)[:16])+"@pim-mcp")
+	}
 }
 
 // calendarOfSeries makes a calendar of one series and the zones it may refer to.

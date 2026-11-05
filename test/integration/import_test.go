@@ -575,3 +575,72 @@ func TestImportUpdateReportsTheStoredETag(t *testing.T) {
 		}
 	})
 }
+
+func TestImportUsesTheCalendarPartThatCanBeRead(t *testing.T) {
+	s := caldavServers[0]
+	createRadicaleCalendar(t, s)
+	uid := newUID(t)
+	calendarBody := "BEGIN:VCALENDAR\nVERSION:2.0\nPRODID:-//t//t//EN\n" + vevent(uid, "DTSTART:20370110T090000Z", "SUMMARY:In the second part") + "\nEND:VCALENDAR"
+	user := newMailbox(t)
+	seed(t, user, "From: a@example.org\nSubject: Two\nDate: Mon, 02 Nov 2026 10:00:00 +0100\nMIME-Version: 1.0\nContent-Type: multipart/mixed; boundary=\"b\"\n\n--b\nContent-Type: text/calendar\n\n\n--b\n"+
+		"Content-Type: application/octet-stream; name=\"invite.ics\"\nContent-Disposition: attachment; filename=\"invite.ics\"\n\n"+calendarBody+"\n--b--\n")
+
+	got := preview(t, importSession(t, user, s), s.calendar)
+
+	if len(got.Events) != 1 || got.Events[0].UID != uid {
+		t.Errorf("events = %+v", got.Events)
+	}
+}
+
+func TestImportOfAnEmptyCalendarPartSaysSo(t *testing.T) {
+	s := caldavServers[0]
+	createRadicaleCalendar(t, s)
+	user := newMailbox(t)
+	seed(t, user, "From: a@example.org\nSubject: Empty\nDate: Mon, 02 Nov 2026 10:00:00 +0100\nMIME-Version: 1.0\nContent-Type: multipart/mixed; boundary=\"b\"\n\n--b\nContent-Type: text/calendar\n\n\n--b--\n")
+	session := importSession(t, user, s)
+
+	result, err := session.CallTool(t.Context(), &mcp.CallToolParams{Name: "calendar_preview_import", Arguments: map[string]any{
+		"message_id": firstMessageID(t, session), "calendar_id": s.calendar,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !result.IsError || !strings.Contains(toolText(result), "empty") {
+		t.Errorf("error = %v, text = %q", result.IsError, toolText(result))
+	}
+}
+
+// A real invite had a UID holding an escaped newline. It has to be found again, or
+// importing it a second time wouldn't be a no-op.
+func TestImportingAnOddUIDTwiceIsANoOp(t *testing.T) {
+	eachImportServer(t, func(t *testing.T, s caldavServer, _ *calendar.Client, user string, session *mcp.ClientSession) {
+		uid := `UID:` + newUID(t) + `\n`
+		seed(t, user, inviteMail("PUBLISH", vevent(uid, "DTSTART:20370210T090000Z", "DTEND:20370210T100000Z", "SUMMARY:Odd")))
+		if got := confirmImport(t, session, s.calendar); !got.Written {
+			t.Fatalf("first import = %+v", got)
+		}
+
+		got := confirmImport(t, session, s.calendar)
+
+		if got.Written || got.Events[0].Action != importer.ActionSkip {
+			t.Errorf("second import = %+v", got)
+		}
+	})
+}
+
+func TestImportingAnEventWithoutUIDTwiceIsANoOp(t *testing.T) {
+	eachImportServer(t, func(t *testing.T, s caldavServer, _ *calendar.Client, user string, session *mcp.ClientSession) {
+		summary := "Haircut " + newUID(t)
+		seed(t, user, inviteMail("PUBLISH", "BEGIN:VEVENT\nDTSTAMP:20261001T120000Z\nDTSTART:20370310T090000Z\nDTEND:20370310T100000Z\nSUMMARY:"+summary+"\nEND:VEVENT"))
+		if got := confirmImport(t, session, s.calendar); !got.Written {
+			t.Fatalf("first import = %+v", got)
+		}
+
+		got := confirmImport(t, session, s.calendar)
+
+		if got.Written || got.Events[0].Action != importer.ActionSkip {
+			t.Errorf("second import = %+v", got)
+		}
+	})
+}

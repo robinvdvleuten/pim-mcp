@@ -52,11 +52,78 @@ func BuildEvent(uid string, fields EventFields, now time.Time) ([]byte, error) {
 }
 
 func encode(cal *goical.Calendar) ([]byte, error) {
+	repair(cal)
 	var out bytes.Buffer
 	if err := goical.NewEncoder(&out).Encode(cal); err != nil {
 		return nil, fmt.Errorf("encode iCalendar: %w", err)
 	}
 	return out.Bytes(), nil
+}
+
+// atMostOnce lists what go-ical's encoder refuses to write twice, per component.
+var atMostOnce = map[string][]string{
+	goical.CompCalendar: {goical.PropProductID, goical.PropVersion, goical.PropCalendarScale, goical.PropMethod, goical.PropUID, goical.PropLastModified, goical.PropURL, goical.PropRefreshInterval, goical.PropSource, goical.PropColor},
+	goical.CompEvent: {goical.PropDateTimeStamp, goical.PropUID, goical.PropDateTimeStart, goical.PropClass, goical.PropCreated, goical.PropDescription, goical.PropGeo, goical.PropLastModified,
+		goical.PropLocation, goical.PropOrganizer, goical.PropPriority, goical.PropRecurrenceRule, goical.PropSequence, goical.PropStatus, goical.PropSummary, goical.PropTransparency, goical.PropURL,
+		goical.PropRecurrenceID, goical.PropDateTimeEnd, goical.PropDuration, goical.PropColor},
+}
+
+// repair makes a calendar one that go-ical's encoder will write. Its rules follow
+// RFC 5545, but real invites break them, and a stricter writer than reader would
+// make mail we can read impossible to store.
+func repair(cal *goical.Calendar) {
+	if cal.Props.Get(goical.PropVersion) == nil {
+		cal.Props.SetText(goical.PropVersion, "2.0")
+	}
+	if cal.Props.Get(goical.PropProductID) == nil {
+		cal.Props.SetText(goical.PropProductID, productID)
+	}
+	keepFirst(cal.Component)
+	cal.Children = slices.DeleteFunc(cal.Children, func(child *goical.Component) bool {
+		return child.Name == goical.CompTimezone && !usableTimezone(child)
+	})
+	for _, child := range cal.Children {
+		if child.Name != goical.CompEvent {
+			continue
+		}
+		keepFirst(child)
+		if child.Props.Get(goical.PropDateTimeStamp) == nil {
+			child.Props.SetDateTime(goical.PropDateTimeStamp, time.Now().UTC())
+		}
+		if child.Props.Get(goical.PropDateTimeEnd) != nil {
+			child.Props.Del(goical.PropDuration)
+		}
+		child.Children = slices.DeleteFunc(child.Children, func(nested *goical.Component) bool {
+			return nested.Name != goical.CompAlarm
+		})
+	}
+}
+
+func keepFirst(component *goical.Component) {
+	for _, name := range atMostOnce[component.Name] {
+		if props := component.Props[name]; len(props) > 1 {
+			component.Props[name] = props[:1]
+		}
+	}
+}
+
+// usableTimezone says whether a VTIMEZONE defines anything. One that doesn't can
+// only be dropped: an event naming it still resolves if the name is a known one.
+func usableTimezone(component *goical.Component) bool {
+	if len(component.Props[goical.PropTimezoneID]) != 1 || len(component.Children) == 0 {
+		return false
+	}
+	for _, child := range component.Children {
+		if child.Name != goical.CompTimezoneStandard && child.Name != goical.CompTimezoneDaylight {
+			return false
+		}
+		for _, name := range []string{goical.PropDateTimeStart, goical.PropTimezoneOffsetTo, goical.PropTimezoneOffsetFrom} {
+			if len(child.Props[name]) != 1 {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // setText stores text escaped. A carriage return isn't escaped by go-ical, and

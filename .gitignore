@@ -1,6 +1,10 @@
 # Build output.
 /bin/
+/pim-mcp
 
 # Vale packages are installed by `vale sync`; only our own style is tracked.
 .vale/styles/*
 !.vale/styles/PimMcp/
+
+# GoReleaser output.
+/dist/

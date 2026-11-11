@@ -1,5 +1,10 @@
 version: "2"
 
+run:
+  # The integration tests are behind a build tag, and lint only what it builds.
+  build-tags:
+    - integration
+
 linters:
   enable:
     - errorlint

@@ -1,0 +1,45 @@
+name: Fuzz
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'LICENSE'
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  # A short run of each target: it replays the seeds and finds shallow crashers.
+  # Hostile mail and invites are the input this server exists to read.
+  fuzz:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { package: ical, target: FuzzParseInvite }
+          - { package: ical, target: FuzzExpand }
+          - { package: mail, target: FuzzDecodeBase64 }
+          - { package: mail, target: FuzzHTMLToText }
+          - { package: mail, target: FuzzHTMLScriptNeverShown }
+          - { package: mail, target: FuzzMessageID }
+          - { package: mail, target: FuzzDecodeID }
+    name: ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: go.mod
+      - run: go test -run '^$' -fuzz '^${{ matrix.target }}$' -fuzztime 30s -fuzzminimizetime 1m ./internal/${{ matrix.package }}/
+      # The failing input, to reproduce with: go test -run <target>/<name>
+      - if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: crasher-${{ matrix.target }}
+          path: internal/${{ matrix.package }}/testdata/fuzz/

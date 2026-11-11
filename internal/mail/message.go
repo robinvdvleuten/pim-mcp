@@ -34,6 +34,10 @@ var (
 	ErrEmptyCalendarPart = errors.New("this message's calendar part is empty")
 	// ErrCalendarPartTooLarge means an invite is bigger than any real one.
 	ErrCalendarPartTooLarge = errors.New("the calendar part is over the 1 MiB limit")
+	// ErrNoSuchPart means a message has no part with the given path.
+	ErrNoSuchPart = errors.New("this message has no such part; use a path from parts")
+	// ErrPartNotText means a part is not text.
+	ErrPartNotText = errors.New("binary attachments can't be read")
 )
 
 // Part describes one leaf of a message's MIME structure.
@@ -64,12 +68,15 @@ type Message struct {
 	Parts       []Part    `json:"parts"`
 }
 
-// Content is a message together with its readable text. BodyType says whether
-// Body is text/plain or text/html, and is empty if there is no readable text.
+// Content is a message together with its readable text. BodyType is the media
+// type of the part the text came from, and is empty if there is no readable
+// text. HTML is turned into text: BodyConverted says so, and then Body is not
+// HTML although BodyType is text/html.
 type Content struct {
 	Message
 	Body          string `json:"body"`
 	BodyType      string `json:"body_type"`
+	BodyConverted bool   `json:"body_converted"`
 	BodyTruncated bool   `json:"body_truncated"`
 }
 
@@ -78,9 +85,16 @@ type Content struct {
 func (c *Client) Message(ctx context.Context, id string) (*Message, error) {
 	defer c.bind(ctx)()
 
+	message, _, err := c.message(ctx, id)
+	return message, err
+}
+
+// message is Message for callers that go on to read parts. They get the UID, so
+// they don't open and check the folder a second time.
+func (c *Client) message(ctx context.Context, id string) (*Message, imap.UID, error) {
 	uid, err := c.open(ctx, id)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	buf, err := c.fetchOne(ctx, uid, &imap.FetchOptions{
 		Envelope:      true,
@@ -88,10 +102,10 @@ func (c *Client) Message(ctx context.Context, id string) (*Message, error) {
 		BodyStructure: &imap.FetchItemBodyStructure{Extended: true},
 	})
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	if buf.RFC822Size > maxMessageBytes {
-		return nil, fmt.Errorf("message is %d MiB: %w", buf.RFC822Size/(1024*1024), ErrMessageTooLarge)
+		return nil, 0, fmt.Errorf("message is %d MiB: %w", buf.RFC822Size/(1024*1024), ErrMessageTooLarge)
 	}
 
 	parts := messageParts(buf.BodyStructure)
@@ -107,34 +121,62 @@ func (c *Client) Message(ctx context.Context, id string) (*Message, error) {
 		MessageID:   buf.Envelope.MessageID,
 		HasCalendar: slices.ContainsFunc(parts, Part.isCalendar),
 		Parts:       parts,
-	}, nil
+	}, uid, nil
 }
 
-// Read returns a message with its readable text.
-func (c *Client) Read(ctx context.Context, id string) (*Content, error) {
-	message, err := c.Message(ctx, id)
+// Read returns a message with its readable text. With a part path from Parts,
+// the text is that part's instead of the message's main text.
+func (c *Client) Read(ctx context.Context, id, path string) (*Content, error) {
+	defer c.bind(ctx)()
+
+	message, uid, err := c.message(ctx, id)
 	if err != nil {
 		return nil, err
 	}
 	content := &Content{Message: *message}
-	part, ok := bodyPart(message.Parts)
-	if !ok {
-		return content, nil
+	var part Part
+	if path == "" {
+		var ok bool
+		if part, ok = bodyPart(message.Parts); !ok {
+			return content, nil
+		}
+	} else if part, err = readablePart(message.Parts, path); err != nil {
+		return nil, err
 	}
-	raw, err := c.PartContent(ctx, id, part)
+	raw, err := c.partContent(ctx, uid, part)
 	if err != nil {
 		return nil, err
 	}
 	content.BodyType = part.MediaType
-	content.Body, content.BodyTruncated = truncateBody(bodyText(raw, part.charset))
+	text := bodyText(raw, part.charset)
+	if part.MediaType == "text/html" {
+		text, content.BodyConverted = htmlToText(text), true
+	}
+	content.Body, content.BodyTruncated = truncateBody(text)
 	return content, nil
+}
+
+// readablePart finds a part by its path. Only text can be read: a binary
+// attachment would be bytes the agent can't use.
+func readablePart(parts []Part, path string) (Part, error) {
+	i := slices.IndexFunc(parts, func(p Part) bool { return p.Path == path })
+	if i < 0 {
+		return Part{}, fmt.Errorf("part %q: %w", path, ErrNoSuchPart)
+	}
+	part := parts[i]
+	if !strings.HasPrefix(part.MediaType, "text/") && !part.isCalendar() {
+		return Part{}, fmt.Errorf("part %q is %s: %w", path, part.MediaType, ErrPartNotText)
+	}
+	return part, nil
 }
 
 // CalendarPart returns a message's invite as UTF-8. If a message has several
 // calendar parts, such as the same invite as text and as an attachment, the
 // first that can be read is used.
 func (c *Client) CalendarPart(ctx context.Context, id string) ([]byte, error) {
-	message, err := c.Message(ctx, id)
+	defer c.bind(ctx)()
+
+	message, uid, err := c.message(ctx, id)
 	if err != nil {
 		return nil, err
 	}
@@ -143,7 +185,7 @@ func (c *Client) CalendarPart(ctx context.Context, id string) ([]byte, error) {
 		if !part.isCalendar() {
 			continue
 		}
-		data, err := c.calendarPartText(ctx, id, part)
+		data, err := c.calendarPartText(ctx, uid, part)
 		if err == nil {
 			return data, nil
 		}
@@ -154,11 +196,11 @@ func (c *Client) CalendarPart(ctx context.Context, id string) ([]byte, error) {
 
 // calendarPartText reads one calendar part. An empty one counts as a failure, so
 // that a message sending the same invite in two forms can still use the other.
-func (c *Client) calendarPartText(ctx context.Context, id string, part Part) ([]byte, error) {
+func (c *Client) calendarPartText(ctx context.Context, uid imap.UID, part Part) ([]byte, error) {
 	if part.Size > maxCalendarPartBytes {
 		return nil, ErrCalendarPartTooLarge
 	}
-	raw, err := c.PartContent(ctx, id, part)
+	raw, err := c.partContent(ctx, uid, part)
 	if err != nil {
 		return nil, err
 	}
@@ -180,6 +222,12 @@ func (c *Client) PartContent(ctx context.Context, id string, part Part) ([]byte,
 	if err != nil {
 		return nil, err
 	}
+	return c.partContent(ctx, uid, part)
+}
+
+// partContent fetches a part of the folder that open or message selected on
+// this connection, which is read-only and was checked against its UIDVALIDITY.
+func (c *Client) partContent(ctx context.Context, uid imap.UID, part Part) ([]byte, error) {
 	section := &imap.FetchItemBodySection{Part: part.section, Peek: true}
 	buf, err := c.fetchOne(ctx, uid, &imap.FetchOptions{BodySection: []*imap.FetchItemBodySection{section}})
 	if err != nil {

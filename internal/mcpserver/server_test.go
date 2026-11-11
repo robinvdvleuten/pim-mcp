@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -89,8 +90,13 @@ func testAccount() (*account.Account, error) {
 	}, nil
 }
 
+func testAccounts() ([]account.Account, error) {
+	a, err := testAccount()
+	return []account.Account{*a}, err
+}
+
 func TestAccountInfoListsAsReadOnlyTool(t *testing.T) {
-	session := connect(t, New(Options{Version: "abc123", Account: testAccount}))
+	session := connect(t, New(Options{Version: "abc123", Accounts: testAccounts}))
 
 	result, err := session.ListTools(context.Background(), nil)
 	if err != nil {
@@ -111,7 +117,11 @@ func TestAccountInfoReturnsTheAccount(t *testing.T) {
 
 	for name, readOnly := range tests {
 		t.Run(name, func(t *testing.T) {
-			session := connect(t, New(Options{Version: "abc123", Account: testAccount, ReadOnly: readOnly}))
+			zone, err := time.LoadLocation("Pacific/Auckland")
+			if err != nil {
+				t.Fatal(err)
+			}
+			session := connect(t, New(Options{Version: "abc123", Accounts: testAccounts, ReadOnly: readOnly, Zone: zone}))
 
 			var info AccountInfo
 			result := callTool(t, session, "account_info", &info)
@@ -126,8 +136,10 @@ func TestAccountInfoReturnsTheAccount(t *testing.T) {
 				IMAPSecurity: account.SecurityTLS,
 				CalDAVURL:    "https://dav.example.org/",
 				ReadOnly:     readOnly,
+				Timezone:     "Pacific/Auckland",
+				Accounts:     []AccountEntry{{Email: "me@example.org", Default: true}},
 			}
-			if info != want {
+			if !reflect.DeepEqual(info, want) {
 				t.Errorf("info = %+v, want %+v", info, want)
 			}
 		})
@@ -137,11 +149,11 @@ func TestAccountInfoReturnsTheAccount(t *testing.T) {
 func TestAccountInfoReadsTheAccountOnEachCall(t *testing.T) {
 	// A user who adds the account while the server runs doesn't have to restart it.
 	var configured bool
-	session := connect(t, New(Options{Version: "abc123", Account: func() (*account.Account, error) {
+	session := connect(t, New(Options{Version: "abc123", Accounts: func() ([]account.Account, error) {
 		if !configured {
 			return nil, account.ErrNoAccount
 		}
-		return testAccount()
+		return testAccounts()
 	}}))
 
 	first := callTool[AccountInfo](t, session, "account_info", nil)
@@ -167,7 +179,7 @@ func TestMailSearchRefusesBadInputWithoutConnecting(t *testing.T) {
 	for name, args := range tests {
 		t.Run(name, func(t *testing.T) {
 			var dials int
-			session := connect(t, New(Options{Version: "test", DialMail: func(context.Context) (*mail.Client, error) {
+			session := connect(t, New(Options{Version: "test", DialMail: func(context.Context, string) (*mail.Client, error) {
 				dials++
 				return nil, errors.New("must not connect")
 			}}))
@@ -185,7 +197,7 @@ func TestMailSearchRefusesBadInputWithoutConnecting(t *testing.T) {
 }
 
 func TestMailToolsReportConnectionFailure(t *testing.T) {
-	session := connect(t, New(Options{Version: "test", DialMail: func(context.Context) (*mail.Client, error) {
+	session := connect(t, New(Options{Version: "test", DialMail: func(context.Context, string) (*mail.Client, error) {
 		return nil, errors.New("no account configured")
 	}}))
 
@@ -215,7 +227,7 @@ func TestCalendarListEventsRefusesBadInputWithoutConnecting(t *testing.T) {
 			var requests int
 			server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { requests++ }))
 			t.Cleanup(server.Close)
-			session := connect(t, New(Options{Version: "test", DialCalendar: func() (*calendar.Client, error) {
+			session := connect(t, New(Options{Version: "test", DialCalendar: func(string) (*calendar.Client, error) {
 				return calendar.New(calendar.Config{URL: server.URL})
 			}}))
 
@@ -326,6 +338,7 @@ func TestCreateEventInputs(t *testing.T) {
 		start  string
 		allDay bool
 		bad    bool
+		inBody []string // what the stored calendar object must hold
 	}{
 		{name: "RFC 3339", args: timed, start: "2026-11-10T09:00:00Z"},
 		{name: "local time and a zone", args: with(map[string]any{"start": "2026-11-10T09:00:00", "end": "2026-11-10T10:00:00", "timezone": "Europe/Amsterdam"}), start: "2026-11-10T08:00:00Z"},
@@ -339,6 +352,17 @@ func TestCreateEventInputs(t *testing.T) {
 		{name: "neither", args: with(map[string]any{"start": nil, "end": nil}), bad: true},
 		{name: "bad date", args: with(map[string]any{"start": nil, "end": nil, "date": "soon"}), bad: true},
 		{name: "last day before the first", args: with(map[string]any{"start": nil, "end": nil, "date": "2026-11-10", "end_date": "2026-11-09"}), bad: true},
+		{name: "weekly in a zone", args: with(map[string]any{"start": "2026-11-10T09:00", "end": "2026-11-10T10:00", "timezone": "Europe/Amsterdam", "recurrence": "FREQ=WEEKLY;BYDAY=TU;COUNT=4"}),
+			start: "2026-11-10T08:00:00Z", inBody: []string{"DTSTART;TZID=Europe/Amsterdam:20261110T090000", "BEGIN:VTIMEZONE", "RRULE:FREQ=WEEKLY;COUNT=4;BYDAY=TU"}},
+		{name: "RFC 3339 is converted into the zone", args: with(map[string]any{"start": "2026-11-10T08:00:00Z", "end": "2026-11-10T09:00:00Z", "timezone": "Europe/Amsterdam", "recurrence": "FREQ=WEEKLY;BYDAY=TU"}),
+			start: "2026-11-10T08:00:00Z", inBody: []string{"DTSTART;TZID=Europe/Amsterdam:20261110T090000", "DTEND;TZID=Europe/Amsterdam:20261110T100000"}},
+		{name: "all-day weekly", args: with(map[string]any{"start": nil, "end": nil, "date": "2026-11-10", "recurrence": "FREQ=WEEKLY;BYDAY=TU;UNTIL=20261231"}),
+			start: "2026-11-10T00:00:00Z", allDay: true, inBody: []string{"DTSTART;VALUE=DATE:20261110", "RRULE:FREQ=WEEKLY;BYDAY=TU;UNTIL=20261231\r\n"}},
+		{name: "recurring without a zone", args: with(map[string]any{"recurrence": "FREQ=WEEKLY;BYDAY=TU"}), bad: true},
+		{name: "recurring with a bad zone", args: with(map[string]any{"timezone": "Mars/Olympus", "recurrence": "FREQ=WEEKLY;BYDAY=TU"}), bad: true},
+		{name: "recurrence that starts on another day", args: with(map[string]any{"timezone": "Europe/Amsterdam", "recurrence": "FREQ=WEEKLY;BYDAY=MO"}), bad: true},
+		{name: "hourly", args: with(map[string]any{"timezone": "Europe/Amsterdam", "recurrence": "FREQ=HOURLY"}), bad: true},
+		{name: "a property smuggled in", args: with(map[string]any{"timezone": "Europe/Amsterdam", "recurrence": "FREQ=WEEKLY;BYDAY=TU\r\nATTENDEE:mailto:x@example.org"}), bad: true},
 		{name: "end date without a date", args: with(map[string]any{"end_date": "2026-11-12"}), bad: true},
 	}
 
@@ -346,13 +370,22 @@ func TestCreateEventInputs(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			var body string
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				// A write is only sent once the calendar home is known.
+				if r.Method == "PROPFIND" {
+					w.WriteHeader(http.StatusMultiStatus)
+					_, _ = w.Write([]byte(`<d:multistatus xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav"><d:response><d:propstat><d:prop>
+<d:current-user-principal><d:href>/</d:href></d:current-user-principal>
+<c:calendar-home-set><d:href>/</d:href></c:calendar-home-set>
+</d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response></d:multistatus>`))
+					return
+				}
 				data, _ := io.ReadAll(r.Body)
 				body = string(data)
 				w.Header().Set("ETag", `"e"`)
 				w.WriteHeader(http.StatusCreated)
 			}))
 			t.Cleanup(server.Close)
-			session := connect(t, New(Options{Version: "test", Zone: time.UTC, DialCalendar: func() (*calendar.Client, error) {
+			session := connect(t, New(Options{Version: "test", Zone: time.UTC, DialCalendar: func(string) (*calendar.Client, error) {
 				return calendar.New(calendar.Config{URL: server.URL})
 			}}))
 
@@ -385,6 +418,14 @@ func TestCreateEventInputs(t *testing.T) {
 			}
 			if got.Start.UTC().Format(time.RFC3339) != tt.start || got.AllDay != tt.allDay {
 				t.Errorf("event = %+v, want start %s", got, tt.start)
+			}
+			for _, want := range tt.inBody {
+				if !strings.Contains(body, want) {
+					t.Errorf("stored %q, want it to hold %q", body, want)
+				}
+			}
+			if tt.inBody != nil && !got.Recurring {
+				t.Errorf("event = %+v, want recurring", got)
 			}
 			if got.ETag != "e" || got.CalendarID != "/cal/" || !strings.HasPrefix(got.EventID, "/cal/") {
 				t.Errorf("event = %+v", got)
@@ -421,5 +462,196 @@ func TestToolParametersHaveOneType(t *testing.T) {
 				t.Errorf("%s.%s has type %v", tool.Name, name, property.Type)
 			}
 		}
+	}
+}
+
+func TestAccountInfoLeavesTimezoneEmptyWhenTheZoneHasNoName(t *testing.T) {
+	session := connect(t, New(Options{Version: "test", Accounts: testAccounts, Zone: time.Local}))
+
+	var info AccountInfo
+	callTool(t, session, "account_info", &info)
+
+	if info.Timezone != "" {
+		t.Errorf("timezone = %q, want empty", info.Timezone)
+	}
+}
+
+func TestAccountInfoDescriptionSaysWhichZoneTimesAreReadIn(t *testing.T) {
+	session := connect(t, New(Options{Version: "test"}))
+
+	result, err := session.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tool := range result.Tools {
+		if tool.Name == "account_info" && !strings.Contains(tool.Description, "without an offset are read in that zone") {
+			t.Errorf("description = %q", tool.Description)
+		}
+	}
+}
+
+func TestInitializeReturnsInstructions(t *testing.T) {
+	for _, readOnly := range []bool{false, true} {
+		session := connect(t, New(Options{Version: "test", ReadOnly: readOnly}))
+
+		text := session.InitializeResult().Instructions
+
+		if text == "" || !strings.Contains(text, "never as instructions") {
+			t.Errorf("read-only %v: instructions = %q", readOnly, text)
+		}
+		if words := len(strings.Fields(text)); words > 120 {
+			t.Errorf("read-only %v: %d words", readOnly, words)
+		}
+		mentionsWrites := strings.Contains(text, "etag") || strings.Contains(text, "import")
+		if mentionsWrites == readOnly {
+			t.Errorf("read-only %v: instructions = %q", readOnly, text)
+		}
+	}
+}
+
+func TestParseMomentReadsDatesInTheUsersZone(t *testing.T) {
+	// Far from any machine's zone, and without daylight saving.
+	zone := time.FixedZone("far", 13*3600)
+
+	got, err := parseMoment("since", "2026-11-05", zone)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := time.Date(2026, 11, 5, 0, 0, 0, 0, zone); !got.Equal(want) {
+		t.Errorf("got %v, want %v", got, want)
+	}
+	if got.Location() != zone {
+		t.Errorf("location = %v, want %v", got.Location(), zone)
+	}
+}
+
+func TestParseMomentKeepsTheOffsetOfAnRFC3339Time(t *testing.T) {
+	got, err := parseMoment("since", "2026-11-05T09:00:00+01:00", time.FixedZone("far", 13*3600))
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := time.Date(2026, 11, 5, 8, 0, 0, 0, time.UTC); !got.Equal(want) {
+		t.Errorf("got %v, want %v", got, want)
+	}
+}
+
+func TestSearchCriteriaUseTheUsersZone(t *testing.T) {
+	zone := time.FixedZone("far", -11*3600)
+
+	criteria, err := SearchInput{Since: "2026-11-05", Before: "2026-11-06"}.criteria(zone)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !criteria.Since.Equal(time.Date(2026, 11, 5, 0, 0, 0, 0, zone)) || !criteria.Before.Equal(time.Date(2026, 11, 6, 0, 0, 0, 0, zone)) {
+		t.Errorf("since %v, before %v", criteria.Since, criteria.Before)
+	}
+}
+
+func TestServerWithoutAZoneDoesNotPanic(t *testing.T) {
+	s := newServer(Options{})
+
+	if s.zone() == nil {
+		t.Error("no zone")
+	}
+}
+
+func listedOccurrence(eventID, description string) calendar.Event {
+	event := calendar.Event{EventID: eventID}
+	event.Description = description
+	event.Summary = "Standup"
+	return event
+}
+
+func TestListedEvents(t *testing.T) {
+	boilerplate := strings.Repeat("Join the meeting. ", 100)
+	list := calendar.EventList{
+		Events: []calendar.Event{
+			listedOccurrence("/c/series.ics", boilerplate),
+			listedOccurrence("/c/series.ics", boilerplate),
+			listedOccurrence("/c/series.ics", "Moved: bring slides"),
+			listedOccurrence("/c/series.ics", boilerplate),
+			listedOccurrence("/c/other.ics", boilerplate),
+			listedOccurrence("/c/single.ics", "Once"),
+			listedOccurrence("/c/empty.ics", ""),
+			listedOccurrence("/c/empty.ics", ""),
+		},
+		Skipped: []calendar.SkippedEvent{{EventID: "/c/bad.ics", Reason: "unknown zone"}},
+	}
+
+	got := listedEvents(list)
+
+	type view struct {
+		description string
+		repeated    bool
+	}
+	want := []view{
+		{boilerplate, false},
+		{"", true},
+		{"Moved: bring slides", false},
+		{"", true},
+		{boilerplate, false}, // another event with the same text
+		{"Once", false},
+		{"", false},
+		{"", false},
+	}
+	if len(got.Events) != len(want) {
+		t.Fatalf("got %d events, want %d", len(got.Events), len(want))
+	}
+	for i, w := range want {
+		if got.Events[i].Description != w.description || got.Events[i].DescriptionRepeated != w.repeated {
+			t.Errorf("event %d: description %.20q, repeated %v; want %.20q, %v", i, got.Events[i].Description, got.Events[i].DescriptionRepeated, w.description, w.repeated)
+		}
+	}
+	if len(got.Skipped) != 1 {
+		t.Errorf("skipped = %v", got.Skipped)
+	}
+	if list.Events[1].Description != boilerplate {
+		t.Error("the input was changed")
+	}
+}
+
+func TestListedEventsJSONShape(t *testing.T) {
+	got := listedEvents(calendar.EventList{Events: []calendar.Event{
+		listedOccurrence("/c/a.ics", "text"), listedOccurrence("/c/a.ics", "text"),
+	}})
+
+	data, err := json.Marshal(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded struct {
+		Events  []map[string]any `json:"events"`
+		Skipped []any            `json:"skipped"`
+	}
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	plain, err := json.Marshal(calendar.EventList{Events: []calendar.Event{listedOccurrence("/c/a.ics", "text")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var original struct {
+		Events []map[string]any `json:"events"`
+	}
+	if err := json.Unmarshal(plain, &original); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := decoded.Events[0]["description_repeated"]; ok {
+		t.Error("the first occurrence has description_repeated")
+	}
+	if decoded.Events[1]["description_repeated"] != true || decoded.Events[1]["description"] != "" {
+		t.Errorf("repeat = %v", decoded.Events[1])
+	}
+	for key := range original.Events[0] {
+		if _, ok := decoded.Events[0][key]; !ok {
+			t.Errorf("field %q is gone", key)
+		}
+	}
+	if len(decoded.Events[0]) != len(original.Events[0]) {
+		t.Errorf("fields differ: %v vs %v", decoded.Events[0], original.Events[0])
 	}
 }

@@ -23,12 +23,33 @@ const (
 // ErrNoPassword means neither the environment nor the keychain has a password.
 var ErrNoPassword = fmt.Errorf("no password found, run: pim-mcp account add, or set %s", PasswordEnv)
 
-// Password returns the password for an account and where it came from. The
-// environment wins, like it does over the config file, and it means the
-// keychain isn't touched where there is none.
-func Password(email string) (password, source string, err error) {
-	if password := os.Getenv(PasswordEnv); password != "" {
-		return password, SourceEnvironment, nil
+// ErrEnvSeveralAccounts means the environment password was refused. It is one
+// password, and with several accounts it would go to the servers of each.
+var ErrEnvSeveralAccounts = fmt.Errorf("%s holds one password, so it only works with a single account: unset it and use the keychain", PasswordEnv)
+
+// CheckEnvForNewAccount refuses to let the environment password serve an
+// account that would be one of several. existing is how many accounts are
+// configured already.
+func CheckEnvForNewAccount(existing int) error {
+	if existing >= 1 && os.Getenv(PasswordEnv) != "" {
+		return ErrEnvSeveralAccounts
+	}
+	return nil
+}
+
+// Password returns the password for an account and where it came from. accounts
+// is how many accounts are configured. The environment wins when there is just
+// one, like it does over the config file, and it means the keychain isn't
+// touched where there is none. With several accounts the environment password
+// is never used, as it would be sent to the servers of every one of them, and
+// asking while it is set is an error rather than a quiet fallback to the
+// keychain.
+func Password(email string, accounts int) (password, source string, err error) {
+	if os.Getenv(PasswordEnv) != "" {
+		if accounts > 1 {
+			return "", "", ErrEnvSeveralAccounts
+		}
+		return os.Getenv(PasswordEnv), SourceEnvironment, nil
 	}
 	password, err = keyring.Get(keyringService, email)
 	if errors.Is(err, keyring.ErrNotFound) {

@@ -40,9 +40,77 @@ func TestVersionString(t *testing.T) {
 			want: revision + "-dirty",
 		},
 		{
-			name: "go install falls back to the module version",
-			info: &debug.BuildInfo{Main: debug.Module{Version: "v0.0.0-20261105-ad5c02c"}},
-			want: "v0.0.0-20261105-ad5c02c",
+			name: "go install of an untagged commit reports the pseudo-version",
+			info: &debug.BuildInfo{Main: debug.Module{Version: "v0.0.0-20261105160743-0a9722d511fa"}},
+			want: "v0.0.0-20261105160743-0a9722d511fa",
+		},
+		{
+			name: "go install of a tag reports the tag",
+			info: &debug.BuildInfo{Main: debug.Module{Version: "v1.2.3"}},
+			want: "v1.2.3",
+		},
+		{
+			name: "tagged checkout reports the tag over the revision",
+			info: &debug.BuildInfo{
+				Main: debug.Module{Version: "v1.2.3"},
+				Settings: []debug.BuildSetting{
+					{Key: "vcs.revision", Value: revision},
+					{Key: "vcs.modified", Value: "false"},
+				},
+			},
+			want: "v1.2.3",
+		},
+		{
+			name: "modified tagged checkout keeps the go command's marker",
+			info: &debug.BuildInfo{
+				Main: debug.Module{Version: "v1.2.3+dirty"},
+				Settings: []debug.BuildSetting{
+					{Key: "vcs.revision", Value: revision},
+					{Key: "vcs.modified", Value: "true"},
+				},
+			},
+			want: "v1.2.3+dirty",
+		},
+		{
+			name: "untagged checkout ignores the pseudo-version and reports the revision",
+			info: &debug.BuildInfo{
+				Main: debug.Module{Version: "v0.0.0-20261105160743-ad5c02c01234"},
+				Settings: []debug.BuildSetting{
+					{Key: "vcs.revision", Value: revision},
+					{Key: "vcs.modified", Value: "false"},
+				},
+			},
+			want: revision,
+		},
+		{
+			name: "untagged checkout after a release still reports the revision",
+			info: &debug.BuildInfo{
+				Main: debug.Module{Version: "v0.1.1-0.20261105160743-ad5c02c01234"},
+				Settings: []debug.BuildSetting{
+					{Key: "vcs.revision", Value: revision},
+					{Key: "vcs.modified", Value: "false"},
+				},
+			},
+			want: revision,
+		},
+		{
+			name: "modified untagged checkout is marked dirty",
+			info: &debug.BuildInfo{
+				Main: debug.Module{Version: "v0.0.0-20261105160743-ad5c02c01234+dirty"},
+				Settings: []debug.BuildSetting{
+					{Key: "vcs.revision", Value: revision},
+					{Key: "vcs.modified", Value: "true"},
+				},
+			},
+			want: revision + "-dirty",
+		},
+		{
+			name: "devel with a revision reports the revision",
+			info: &debug.BuildInfo{
+				Main:     debug.Module{Version: "(devel)"},
+				Settings: []debug.BuildSetting{{Key: "vcs.revision", Value: revision}},
+			},
+			want: revision,
 		},
 		{
 			name: "no version information",

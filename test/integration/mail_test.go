@@ -17,7 +17,6 @@ import (
 	"github.com/emersion/go-imap/v2/imapclient"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/robinvdvleuten/pim-mcp/internal/account"
 	"github.com/robinvdvleuten/pim-mcp/internal/mail"
 	"github.com/robinvdvleuten/pim-mcp/internal/mcpserver"
 )
@@ -28,8 +27,7 @@ func mailSession(t *testing.T, user string) *mcp.ClientSession {
 	t.Helper()
 	server := mcpserver.New(mcpserver.Options{
 		Version: "test",
-		Account: func() (*account.Account, error) { return nil, account.ErrNoAccount },
-		DialMail: func(ctx context.Context) (*mail.Client, error) {
+		DialMail: func(ctx context.Context, _ string) (*mail.Client, error) {
 			return mail.Dial(ctx, dovecotConfig(user))
 		},
 	})
@@ -529,6 +527,40 @@ func TestMailGetReturnsHeadersBodyAndParts(t *testing.T) {
 	}
 }
 
+func TestMailGetReadsAPart(t *testing.T) {
+	user := newMailbox(t)
+	seed(t, user, richMail)
+	session := mailSession(t, user)
+	id := firstMessageID(t, session)
+
+	html := callTool[mail.Content](t, session, "mail_get", map[string]any{"id": id, "part": "1.2"})
+	invite := callTool[mail.Content](t, session, "mail_get", map[string]any{"id": id, "part": "2"})
+
+	if html.Body != "Café at noon." || html.BodyType != "text/html" || !html.BodyConverted {
+		t.Errorf("html part: body %q, type %q, converted %v", html.Body, html.BodyType, html.BodyConverted)
+	}
+	if !strings.Contains(invite.Body, "BEGIN:VCALENDAR") || invite.BodyConverted {
+		t.Errorf("calendar part: body %q, converted %v", invite.Body, invite.BodyConverted)
+	}
+}
+
+func TestMailGetRefusesBinaryAndUnknownParts(t *testing.T) {
+	user := newMailbox(t)
+	seed(t, user, richMail)
+	session := mailSession(t, user)
+	id := firstMessageID(t, session)
+
+	for part, want := range map[string]string{"3": "binary attachments can't be read", "9": "no such part"} {
+		result, err := session.CallTool(t.Context(), &mcp.CallToolParams{Name: "mail_get", Arguments: map[string]any{"id": id, "part": part}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !result.IsError || !strings.Contains(toolText(result), want) {
+			t.Errorf("part %s: error = %v, text = %q", part, result.IsError, toolText(result))
+		}
+	}
+}
+
 func TestMailGetFallsBackToHTML(t *testing.T) {
 	user := newMailbox(t)
 	seed(t, user, "From: a@example.org\nSubject: Html only\nDate: Mon, 02 Nov 2026 10:00:00 +0100\nMIME-Version: 1.0\nContent-Type: text/html; charset=utf-8\n\n<b>hello</b>\n")
@@ -536,7 +568,7 @@ func TestMailGetFallsBackToHTML(t *testing.T) {
 
 	got := callTool[mail.Content](t, session, "mail_get", map[string]any{"id": firstMessageID(t, session)})
 
-	if strings.TrimSpace(got.Body) != "<b>hello</b>" || got.BodyType != "text/html" {
+	if got.Body != "hello" || got.BodyType != "text/html" || !got.BodyConverted {
 		t.Errorf("body = %q, type %q", got.Body, got.BodyType)
 	}
 }
@@ -664,7 +696,7 @@ Content-Type: text/html; charset=utf-8
 
 	got := callTool[mail.Content](t, session, "mail_get", map[string]any{"id": firstMessageID(t, session)})
 
-	if strings.TrimSpace(got.Body) != "<p>See the log.</p>" || got.BodyType != "text/html" {
+	if got.Body != "See the log." || got.BodyType != "text/html" || !got.BodyConverted {
 		t.Errorf("body = %q, type %q", got.Body, got.BodyType)
 	}
 }

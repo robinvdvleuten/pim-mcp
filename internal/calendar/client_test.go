@@ -37,6 +37,9 @@ func TestNewAcceptsHTTPSAndLoopback(t *testing.T) {
 
 func TestRedirectToPlainHTTPIsRefused(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveDiscovery(w, r, wideHome) {
+			return
+		}
 		http.Redirect(w, r, "http://dav.example.org/stolen", http.StatusTemporaryRedirect)
 	}))
 	t.Cleanup(server.Close)
@@ -45,7 +48,7 @@ func TestRedirectToPlainHTTPIsRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = client.Get(t.Context(), "/event.ics")
+	_, err = client.Get(t.Context(), "/cal/event.ics")
 
 	if !errors.Is(err, transport.ErrInsecure) {
 		t.Errorf("err = %v, want transport.ErrInsecure", err)
@@ -63,7 +66,7 @@ func TestWriteHeaders(t *testing.T) {
 		{
 			name: "create refuses to overwrite",
 			write: func(c *Client, t *testing.T) error {
-				_, err := c.Create(t.Context(), "/event.ics", []byte("data"))
+				_, err := c.Create(t.Context(), "/cal/event.ics", []byte("data"))
 				return err
 			},
 			wantIfNoneMatch: "*",
@@ -71,7 +74,7 @@ func TestWriteHeaders(t *testing.T) {
 		{
 			name: "update requires the etag it read",
 			write: func(c *Client, t *testing.T) error {
-				_, err := c.Update(t.Context(), "/event.ics", etag, []byte("data"))
+				_, err := c.Update(t.Context(), "/cal/event.ics", etag, []byte("data"))
 				return err
 			},
 			wantIfMatch: `"abc"`,
@@ -82,6 +85,9 @@ func TestWriteHeaders(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			var got http.Header
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if serveDiscovery(w, r, wideHome) {
+					return
+				}
 				got = r.Header.Clone()
 				w.Header().Set("ETag", `"new"`)
 				w.WriteHeader(http.StatusCreated)
@@ -114,6 +120,9 @@ func TestWriteHeaders(t *testing.T) {
 
 func TestWriteReadsETagBackWhenResponseOmitsIt(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveDiscovery(w, r, wideHome) {
+			return
+		}
 		// RFC 4791 5.3.4: a server that alters the data sends no ETag on PUT.
 		if r.Method == http.MethodPut {
 			w.WriteHeader(http.StatusCreated)
@@ -128,7 +137,7 @@ func TestWriteReadsETagBackWhenResponseOmitsIt(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	etag, err := client.Create(t.Context(), "/event.ics", []byte("data"))
+	etag, err := client.Create(t.Context(), "/cal/event.ics", []byte("data"))
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -139,7 +148,10 @@ func TestWriteReadsETagBackWhenResponseOmitsIt(t *testing.T) {
 }
 
 func TestWritePreconditionFailedIsConflict(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveDiscovery(w, r, wideHome) {
+			return
+		}
 		w.WriteHeader(http.StatusPreconditionFailed)
 	}))
 	t.Cleanup(server.Close)
@@ -148,7 +160,7 @@ func TestWritePreconditionFailedIsConflict(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = client.Update(t.Context(), "/event.ics", "stale", []byte("data"))
+	_, err = client.Update(t.Context(), "/cal/event.ics", "stale", []byte("data"))
 
 	if !errors.Is(err, ErrConflict) {
 		t.Errorf("err = %v, want ErrConflict", err)
@@ -164,7 +176,7 @@ func TestUpdateWithoutETagIsRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := client.Update(t.Context(), "/event.ics", "", []byte("data")); err == nil {
+	if _, err := client.Update(t.Context(), "/cal/event.ics", "", []byte("data")); err == nil {
 		t.Error("update without an etag succeeded")
 	}
 	if requests != 0 {

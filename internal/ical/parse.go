@@ -37,8 +37,16 @@ type Occurrence struct {
 var ErrNoCalendarData = errors.New("parse iCalendar: there is no calendar in this data")
 
 // Parse decodes a single iCalendar object.
-func Parse(data []byte) (*goical.Calendar, error) {
-	cal, err := goical.NewDecoder(bytes.NewReader(cleanLines(data))).Decode()
+func Parse(data []byte) (cal *goical.Calendar, err error) {
+	// go-ical panics on some malformed lines, such as a parameter with no value
+	// at the end of one. Calendar data comes from strangers, so that has to be
+	// an error like any other.
+	defer func() {
+		if recover() != nil {
+			cal, err = nil, errors.New("parse iCalendar: malformed line")
+		}
+	}()
+	cal, err = goical.NewDecoder(bytes.NewReader(cleanLines(data))).Decode()
 	if errors.Is(err, io.EOF) {
 		return nil, ErrNoCalendarData
 	}

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 
 	"github.com/robinvdvleuten/pim-mcp/internal/transport"
 )
@@ -42,11 +43,21 @@ type Config struct {
 //
 // Writes use net/http directly because go-webdav's PutCalendarObject can't send
 // preconditions and hides the status code in an internal error type.
+//
+// Every calendar or event ID a caller passes in must lie inside the calendar
+// home, see scope.go.
 type Client struct {
 	base     *url.URL
 	http     *http.Client
 	username string
 	password string
+
+	// home is the calendar home, set by homeSet once it is found. homeLooking
+	// is open while a call is looking for it. A Client is safe for concurrent
+	// use: everything else is fixed by New.
+	homeMu      sync.Mutex
+	home        string
+	homeLooking chan struct{}
 }
 
 // Object is a stored calendar resource. ETag is unquoted, as go-webdav's
@@ -109,6 +120,10 @@ func (c *Client) CheckLogin(ctx context.Context) error {
 
 // Get returns the stored resource at path.
 func (c *Client) Get(ctx context.Context, path string) (*Object, error) {
+	path, err := c.eventPath(ctx, path)
+	if err != nil {
+		return nil, err
+	}
 	req, err := c.newRequest(ctx, http.MethodGet, path, nil)
 	if err != nil {
 		return nil, err
@@ -153,6 +168,10 @@ func (c *Client) Delete(ctx context.Context, path, etag string) error {
 	if etag == "" {
 		return fmt.Errorf("delete %s: an etag is required", path)
 	}
+	path, err := c.eventPath(ctx, path)
+	if err != nil {
+		return err
+	}
 	req, err := c.newRequest(ctx, http.MethodDelete, path, nil)
 	if err != nil {
 		return err
@@ -177,6 +196,10 @@ func (c *Client) Delete(ctx context.Context, path, etag string) error {
 }
 
 func (c *Client) put(ctx context.Context, path string, data []byte, precondition, value string) (string, error) {
+	path, err := c.eventPath(ctx, path)
+	if err != nil {
+		return "", err
+	}
 	req, err := c.newRequest(ctx, http.MethodPut, path, bytes.NewReader(data))
 	if err != nil {
 		return "", err
@@ -197,6 +220,10 @@ func (c *Client) put(ctx context.Context, path string, data []byte, precondition
 	switch {
 	case resp.StatusCode == http.StatusPreconditionFailed:
 		return "", fmt.Errorf("put %s: %w", path, ErrConflict)
+	// Replacing an event that was deleted since it was read. A create that gets
+	// a 404 means a missing calendar instead, which this would misname.
+	case resp.StatusCode == http.StatusNotFound && precondition == "If-Match":
+		return "", fmt.Errorf("put %s: %w", path, ErrEventNotFound)
 	case resp.StatusCode/100 != 2:
 		return "", fmt.Errorf("put %s: %s", path, resp.Status)
 	}

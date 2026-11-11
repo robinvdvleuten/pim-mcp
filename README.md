@@ -2,7 +2,7 @@
 
 PIM is short for personal information manager, the kind of app that keeps your mail and calendar together. pim-mcp lets an AI agent read your mail and manage your calendar on your own servers, with one login. The agent can find the meeting in an email and put it in your calendar in one step, with recurrence and time zones intact. It's built on the assumption that agents make mistakes and that invites come from strangers: your password stays in your keychain, your mail can't be changed, and a stale write can't overwrite an edit you just made on your phone.
 
-- **One account.** Enter your email address and password, and it finds your IMAP and CalDAV servers itself.
+- **One login per account.** Enter your email address and password, and it finds your IMAP and CalDAV servers itself. Add more than one account if you like: the first is the default, and the agent can name another.
 - **Password in your keychain.** Never in a config file, never in logs, and never sent anywhere until you've confirmed the servers.
 - **Email to calendar.** It previews what an invite would do, then imports it. Importing twice changes nothing, and a newer version of an invite updates the event.
 - **Encrypted, verified connections.** Certificates are always checked, and there's no switch to turn that off.
@@ -47,7 +47,7 @@ cd pim-mcp
 go build -o pim-mcp ./cmd/pim-mcp
 ```
 
-**2. Add your account.** It shows the servers it found and asks before your password goes there. If your provider has app passwords, use one.
+**2. Add your account.** It shows the servers it found and asks before your password goes there. If your provider has app passwords, use one. To add another account later, run the same command with its address. The first account you add is the default.
 
 ```bash
 ./pim-mcp account add --email you@example.org
@@ -80,20 +80,22 @@ When you're happy with what it does, add the server again without `--read-only` 
 
 | Tool | What it does | Read-only mode |
 |---|---|---|
-| `account_info` | Shows the account and its servers | ✓ |
+| `account_info` | Shows an account, its servers and your time zone, and lists your accounts | ✓ |
 | `mail_list_folders` | Lists mail folders and their roles | ✓ |
 | `mail_search` | Searches a folder by sender, subject, text, date, or whether it holds an invite | ✓ |
-| `mail_get` | Reads a message: headers, text and a list of its parts | ✓ |
+| `mail_get` | Reads a message: headers, text (HTML is turned into text) and a list of its parts, or the text of one part | ✓ |
 | `calendar_list_calendars` | Lists calendars | ✓ |
 | `calendar_list_events` | Lists events in a range, with recurring events expanded | ✓ |
 | `calendar_free_busy` | Finds when you're busy | ✓ |
 | `calendar_preview_import` | Shows what importing an invite would do, and writes nothing | ✓ |
-| `calendar_create_event` | Creates a single event | |
+| `calendar_create_event` | Creates an event, optionally recurring from an RRULE | |
 | `calendar_update_event` | Changes an event, or one occurrence of a recurring one | |
 | `calendar_delete_event` | Deletes an event, or one occurrence of a recurring one | |
 | `calendar_import_from_email` | Adds, updates or cancels an event from an invite | |
 
 Mail is always read-only: no tool sends, moves, flags or deletes a message, and reading leaves it unread.
+
+Every tool takes an optional `account`, the email address of the account to use. Leave it out and the default account is used. An id from `mail_search`, `calendar_list_calendars` or `calendar_list_events` belongs to the account that returned it, so the agent passes the same `account` again.
 
 ---
 
@@ -133,7 +135,7 @@ Invites and mail are treated as hostile input:
 
 - **Anything your agent reads goes to your AI provider,** and to any other tools the agent has.
 - **The password opens your whole account.** Use an app password if your provider has them.
-- **`PIM_MCP_PASSWORD`** is visible to anything that can read the process's environment. Use the keychain where you can.
+- **`PIM_MCP_PASSWORD`** is visible to anything that can read the process's environment. Use the keychain where you can. It is one password, so it only works with a single account: with several, pim-mcp refuses to use it rather than send it to every account's servers.
 - **No independent security audit** has been done.
 
 ---
@@ -154,20 +156,20 @@ One lookup, Mozilla's ISPDB, tells Mozilla your email domain. `--no-ispdb` turns
 
 | Variable | Effect |
 |---|---|
-| `PIM_MCP_PASSWORD` | Uses this password instead of the keychain, for Docker and CI |
+| `PIM_MCP_PASSWORD` | Uses this password instead of the keychain, for Docker and CI. Only works with a single account; with several it is an error |
 | `PIM_MCP_READ_ONLY=1` | Same as `--read-only` |
 | `PIM_MCP_DEBUG=1` | Logs each request to stderr: the tool and how long it took, never its arguments or results |
 
-Other commands are `account show` and `account remove`.
+Other commands are `account show`, which lists the accounts and marks the default, `account test [--email ADDRESS]`, `account remove [--email ADDRESS]` (`--email` is needed when you have several) and `account default --email ADDRESS`, which makes an account the default.
 
 ---
 
 ## Limits
 
-- **One account** per installation.
+- **Ids belong to one account.** The agent has to pass the same `account` that gave it a message, calendar or event id. A wrong pairing is usually refused, but that is not guaranteed, so it can read or list the wrong account.
 - **No replying to invites.** Importing adds the event to your calendar and tells nobody. On a server that handles scheduling itself, changing an event you organize can make that server notify its attendees.
 - **No Google or Microsoft sign-in.** Only servers that accept a username and password work.
-- **Recurring events** can't be created directly, only imported. Editing covers a whole series or a single occurrence, not "this and following".
+- **Recurring events** can be created, from an RRULE such as `FREQ=WEEKLY;BYDAY=MO`, and a timed one needs a time zone. Editing covers a whole series or a single occurrence, not "this and following", and a series' rule can't be changed after it is created.
 - **Searches** that have to read messages, such as for invites, stop after 2000 and say that there may be more.
 - **Ranges and sizes.** Event listings cover at most 366 days and 1000 occurrences. Messages over 25 MiB aren't read.
 
@@ -196,6 +198,8 @@ To lint commit messages and code, install [mise](https://mise.jdx.dev) and run:
 ```bash
 mise install && mise run setup
 ```
+
+The reasoning behind the design is in [DESIGN.md](DESIGN.md).
 
 ## License
 

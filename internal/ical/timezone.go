@@ -274,7 +274,10 @@ func observanceOnsets(component *goical.Component, from int) ([]time.Time, error
 		if step >= maxZoneSteps {
 			return nil, ErrRuleTooExpensive
 		}
-		at, ok := next()
+		at, ok, err := nextInstance(next)
+		if err != nil {
+			return nil, fmt.Errorf("read definition's RRULE: %w", err)
+		}
 		if !ok || at.After(zoneRulesEnd) {
 			return onsets, nil
 		}
@@ -363,8 +366,8 @@ func localZoneName(tz string, tzSet bool, localtime string) string {
 	return ""
 }
 
-// zoneName returns the name to report: empty when it isn't an IANA name.
-func zoneName(loc *time.Location) string {
+// ZoneName returns the name to report: empty when it isn't an IANA name.
+func ZoneName(loc *time.Location) string {
 	if loc == time.Local {
 		return ""
 	}

@@ -124,7 +124,7 @@ func TestAccountAddSavesAccountAndPassword(t *testing.T) {
 	if *got != want {
 		t.Errorf("account = %+v, want %+v", *got, want)
 	}
-	password, source, err := account.Password("me@example.org")
+	password, source, err := account.Password("me@example.org", 1)
 	if err != nil || password != testPassword || source != account.SourceKeychain {
 		t.Errorf("password = %q from %q, err %v", password, source, err)
 	}
@@ -216,7 +216,7 @@ func TestAccountAddRefusals(t *testing.T) {
 	}
 }
 
-func TestAccountAddRefusesToReplaceAnAccount(t *testing.T) {
+func TestAccountAddAppendsAnotherAccount(t *testing.T) {
 	h := newHarness(t)
 	if code := h.run(addArgs...); code != 0 {
 		t.Fatalf("first add: exit code = %d", code)
@@ -225,15 +225,12 @@ func TestAccountAddRefusesToReplaceAnAccount(t *testing.T) {
 	code := h.run("account", "add", "--email", "other@example.org",
 		"--imap", "m.example.org:993", "--caldav", "https://d.example.org/")
 
-	if code == 0 {
-		t.Fatal("second add succeeded")
+	if code != 0 {
+		t.Fatalf("second add: exit code = %d, stderr = %q", code, h.stderr.String())
 	}
-	if !strings.Contains(h.stderr.String(), "account remove") {
-		t.Errorf("stderr = %q, want it to point at account remove", h.stderr.String())
-	}
-	got, err := h.cli.store.Load()
-	if err != nil || got.Email != "me@example.org" {
-		t.Errorf("account = %+v, err %v, want the first one kept", got, err)
+	got, err := h.cli.store.List()
+	if err != nil || len(got) != 2 || got[0].Email != "me@example.org" || got[1].Email != "other@example.org" {
+		t.Errorf("accounts = %+v, err %v, want the first one kept as the default", got, err)
 	}
 }
 
@@ -352,7 +349,7 @@ func TestAccountRemove(t *testing.T) {
 	if _, err := h.cli.store.Load(); !errors.Is(err, account.ErrNoAccount) {
 		t.Errorf("load: err = %v, want no account", err)
 	}
-	if _, _, err := account.Password("me@example.org"); !errors.Is(err, account.ErrNoPassword) {
+	if _, _, err := account.Password("me@example.org", 1); !errors.Is(err, account.ErrNoPassword) {
 		t.Errorf("password: err = %v, want it gone", err)
 	}
 }

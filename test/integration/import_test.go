@@ -28,10 +28,10 @@ func importSession(t *testing.T, user string, s caldavServer) *mcp.ClientSession
 	server := mcpserver.New(mcpserver.Options{
 		Version: "test",
 		Zone:    time.UTC,
-		DialMail: func(ctx context.Context) (*mail.Client, error) {
+		DialMail: func(ctx context.Context, _ string) (*mail.Client, error) {
 			return mail.Dial(ctx, dovecotConfig(user))
 		},
-		DialCalendar: func() (*calendar.Client, error) {
+		DialCalendar: func(string) (*calendar.Client, error) {
 			return calendar.New(calendar.Config{URL: s.url, Username: caldavUser, Password: caldavPassword})
 		},
 	})

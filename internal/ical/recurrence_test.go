@@ -259,38 +259,63 @@ func TestBuildTimezoneMatchesGo(t *testing.T) {
 	for _, name := range zones {
 		for _, year := range []int{2012, 2026, 2085} {
 			t.Run(fmt.Sprintf("%s from %d", name, year), func(t *testing.T) {
-				loc := location(t, name)
-				component, err := buildTimezone(loc, time.Date(year, 6, 15, 9, 0, 0, 0, loc))
-				if err != nil {
-					t.Fatal(err)
-				}
-
-				// The embedded reader is called directly, so a known name can't stand in for it.
-				read, err := embeddedLocation(component)
-				if err != nil {
-					t.Fatalf("read back: %v", err)
-				}
-				from := time.Date(year, 1, 1, 0, 0, 0, 0, time.UTC).Add(-24 * time.Hour)
-				until := time.Date(year+timezoneHorizonYears+1, 1, 1, 0, 0, 0, 0, time.UTC).Add(24 * time.Hour)
-				checked := 0
-				for at := from; at.Before(until); at = at.Add(time.Hour) {
-					// The definition starts at local midnight on 1 January, which is within
-					// a day of the UTC instant used here.
-					if at.Before(from.Add(24*time.Hour)) || !at.Before(until.Add(-24*time.Hour)) {
-						continue
-					}
-					_, want := at.In(loc).Zone()
-					_, got := at.In(read).Zone()
-					if got != want {
-						t.Fatalf("at %s the offset is %d, Go says %d", at.Format(time.RFC3339), got, want)
-					}
-					checked++
-				}
-				if checked < 24*365*timezoneHorizonYears {
-					t.Errorf("checked only %d hours", checked)
-				}
+				checkTimezoneMatchesGo(t, location(t, name), year)
 			})
 		}
+	}
+}
+
+// macOS ships zone data in the rearguard format, which has no negative DST. There
+// zic writes an offset kept all year as DST all year, with a placeholder standard
+// time that is never in force. Go puts that placeholder in force from 22:00 to
+// midnight UTC on 31 December, and in a leap year it answers with a zone end before
+// the time asked about. Casablanca from 2087 in tzdata before 2026f is like this.
+func TestBuildTimezoneWithDaylightTimeAllYear(t *testing.T) {
+	data, err := encodeTZif(3600, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data = append(data, "\nXXX-2<+01>-1,0/0,J365/23\n"...)
+	loc, err := time.LoadLocationFromTZData("Test/AllYear", data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 2088 is a leap year.
+	checkTimezoneMatchesGo(t, loc, 2085)
+}
+
+// checkTimezoneMatchesGo builds the VTIMEZONE for loc from year, reads it back,
+// and compares the offsets hour by hour with Go's.
+func checkTimezoneMatchesGo(t *testing.T, loc *time.Location, year int) {
+	t.Helper()
+	component, err := buildTimezone(loc, time.Date(year, 6, 15, 9, 0, 0, 0, loc))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The embedded reader is called directly, so a known name can't stand in for it.
+	read, err := embeddedLocation(component)
+	if err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	from := time.Date(year, 1, 1, 0, 0, 0, 0, time.UTC).Add(-24 * time.Hour)
+	until := time.Date(year+timezoneHorizonYears+1, 1, 1, 0, 0, 0, 0, time.UTC).Add(24 * time.Hour)
+	checked := 0
+	for at := from; at.Before(until); at = at.Add(time.Hour) {
+		// The definition starts at local midnight on 1 January, which is within
+		// a day of the UTC instant used here.
+		if at.Before(from.Add(24*time.Hour)) || !at.Before(until.Add(-24*time.Hour)) {
+			continue
+		}
+		_, want := at.In(loc).Zone()
+		_, got := at.In(read).Zone()
+		if got != want {
+			t.Fatalf("at %s the offset is %d, Go says %d", at.Format(time.RFC3339), got, want)
+		}
+		checked++
+	}
+	if checked < 24*365*timezoneHorizonYears {
+		t.Errorf("checked only %d hours", checked)
 	}
 }
 

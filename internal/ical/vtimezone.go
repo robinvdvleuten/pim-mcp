@@ -49,8 +49,17 @@ func buildTimezone(loc *time.Location, from time.Time) (*goical.Component, error
 		case !next.After(at):
 			// Past the last year in the zone's data, Go answers from a rule, and on the
 			// last day of a leap year its bound lies before the time asked about.
-			// Moving on an hour gets out of that day.
-			at = at.Add(time.Hour)
+			// Moving on an hour gets out of that day, but the clocks can change in
+			// that hour, so the exact second is searched for.
+			later := at.Add(time.Hour)
+			if stateAt(later) == previous {
+				at = later
+				continue
+			}
+			change := firstChange(at, later)
+			vtz.Children = append(vtz.Children, observance(change, previous.offset))
+			previous = stateAt(change)
+			at = change
 		default:
 			// The same rule answers with the end of the year when nothing changes then.
 			if state := stateAt(next); state != previous {
@@ -61,6 +70,21 @@ func buildTimezone(loc *time.Location, from time.Time) (*goical.Component, error
 		}
 	}
 	return nil, fmt.Errorf("time zone %s has too many clock changes", loc)
+}
+
+// firstChange returns the first second after from at which the zone is no longer
+// as it is at from. The zone must have changed by until.
+func firstChange(from, until time.Time) time.Time {
+	before := stateAt(from)
+	for until.Sub(from) > time.Second {
+		middle := from.Add(until.Sub(from) / 2).Truncate(time.Second)
+		if stateAt(middle) == before {
+			from = middle
+		} else {
+			until = middle
+		}
+	}
+	return until
 }
 
 // observance describes the zone from the instant at, which must be the start of

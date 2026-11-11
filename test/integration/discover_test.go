@@ -53,8 +53,8 @@ func TestDiscoveryFindsRealCalDAVServers(t *testing.T) {
 		addr string
 		want string
 	}{
-		{"radicale", "127.0.0.1:35232", "https://example.org/"},
-		{"baikal", "127.0.0.1:35233", "https://example.org/dav.php"},
+		{"radicale", hostOf(radicaleURL), "https://example.org/"},
+		{"baikal", hostOf(baikalURL), "https://example.org/dav.php"},
 	}
 
 	for _, tt := range tests {

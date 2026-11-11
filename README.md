@@ -177,29 +177,27 @@ Other commands are `account show`, which lists the accounts and marks the defaul
 
 ## Development
 
-```bash
-go test -race ./...
-```
-
-Integration tests need Docker:
-
-```bash
-docker compose -f test/integration/compose.yaml up -d --wait
-```
-
-```bash
-go test -race -tags integration ./test/integration/...
-```
-
-Add `--profile nextcloud` to the compose command and set `PIM_MCP_TEST_NEXTCLOUD=1` to include Nextcloud.
-
-To lint commit messages and code, install [mise](https://mise.jdx.dev) and run:
+Install [mise](https://mise.jdx.dev), which fetches the pinned Go, linter and Vale, then set up the commit hook:
 
 ```bash
 mise install && mise run setup
 ```
 
-The reasoning behind the design is in [DESIGN.md](DESIGN.md).
+Check a change: formatting, unit tests, lint and known vulnerabilities.
+
+```bash
+mise run check
+```
+
+Integration tests need Docker. This starts fresh test servers, runs the suite and removes them:
+
+```bash
+mise run integration
+```
+
+Set `PIM_MCP_TEST_NEXTCLOUD=1` to include Nextcloud, and `PIM_MCP_TEST_STACK=1` to run a second stack beside the first on other ports.
+
+The reasoning behind the design is in [DESIGN.md](DESIGN.md), and what a review looks for is in [CODING_STANDARDS.md](CODING_STANDARDS.md).
 
 ## License
 

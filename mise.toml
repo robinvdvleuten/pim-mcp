@@ -11,3 +11,37 @@ run = [
   "git config core.hooksPath .githooks",
   "vale sync",
 ]
+
+# Everything CI checks that needs no Docker, on the pinned toolchain.
+[tasks.check]
+description = "Format check, unit tests, lint and vulnerability scan"
+run = [
+  'test -z "$(gofmt -l .)" || { gofmt -l .; echo "gofmt: the files above need formatting" >&2; exit 1; }',
+  "go test -race ./...",
+  "golangci-lint run",
+  "go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...",
+]
+
+# Starts fresh test servers, runs the integration suite and removes them again.
+# PIM_MCP_TEST_STACK=1 (or 2, 3, ...) moves the project name and every port, so
+# several runs can go on at once. PIM_MCP_TEST_NEXTCLOUD=1 adds Nextcloud.
+[tasks.integration]
+description = "Run the integration suite against fresh Docker servers"
+run = """
+set -eu
+stack="${PIM_MCP_TEST_STACK:-0}"
+case "$stack" in ''|*[!0-9]*) echo "PIM_MCP_TEST_STACK must be a number" >&2; exit 2;; esac
+shift=$((stack * 10))
+export COMPOSE_PROJECT_NAME="pim-mcp-test-$stack"
+export PIM_MCP_TEST_IMAP_PORT=$((31143 + shift))
+export PIM_MCP_TEST_IMAPS_PORT=$((31993 + shift))
+export PIM_MCP_TEST_RADICALE_PORT=$((35232 + shift))
+export PIM_MCP_TEST_BAIKAL_PORT=$((35233 + shift))
+export PIM_MCP_TEST_NEXTCLOUD_PORT=$((35234 + shift))
+compose="docker compose -f test/integration/compose.yaml"
+if [ -n "${PIM_MCP_TEST_NEXTCLOUD:-}" ]; then compose="$compose --profile nextcloud"; fi
+$compose down -v >/dev/null 2>&1 || true
+trap '$compose down -v >/dev/null 2>&1' EXIT
+$compose up -d --wait
+go test -race -count=1 -tags integration ./test/integration/...
+"""

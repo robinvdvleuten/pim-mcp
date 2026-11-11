@@ -1,3 +1,6 @@
+# The project name and the host ports can be overridden, so two stacks can run
+# side by side: COMPOSE_PROJECT_NAME and the PIM_MCP_TEST_*_PORT variables, which
+# the tests read too. `mise run integration` sets them all from PIM_MCP_TEST_STACK.
 name: pim-mcp-test
 
 services:
@@ -8,8 +11,8 @@ services:
     volumes:
       - ./dovecot.conf:/etc/dovecot/conf.d/pim-mcp-test.conf:ro
     ports:
-      - "127.0.0.1:31143:31143"
-      - "127.0.0.1:31993:31993"
+      - "127.0.0.1:${PIM_MCP_TEST_IMAP_PORT:-31143}:31143"
+      - "127.0.0.1:${PIM_MCP_TEST_IMAPS_PORT:-31993}:31993"
     healthcheck:
       test: ["CMD", "nc", "-z", "127.0.0.1", "31143"]
       interval: 2s
@@ -22,14 +25,14 @@ services:
       - ./radicale.conf:/config/config:ro
       - ./radicale.users:/config/users:ro
     ports:
-      - "127.0.0.1:35232:5232"
+      - "127.0.0.1:${PIM_MCP_TEST_RADICALE_PORT:-35232}:5232"
 
   baikal:
     image: ckulka/baikal:0.10.1-apache
     volumes:
       - ./baikal-seed.sh:/docker-entrypoint.d/20-seed.sh:ro
     ports:
-      - "127.0.0.1:35233:80"
+      - "127.0.0.1:${PIM_MCP_TEST_BAIKAL_PORT:-35233}:80"
     healthcheck:
       test: ["CMD", "php", "-r", "exit(@fsockopen('127.0.0.1', 80) ? 0 : 1);"]
       interval: 2s
@@ -46,7 +49,7 @@ services:
       NEXTCLOUD_ADMIN_PASSWORD: test-password
       NEXTCLOUD_TRUSTED_DOMAINS: 127.0.0.1 localhost
     ports:
-      - "127.0.0.1:35234:80"
+      - "127.0.0.1:${PIM_MCP_TEST_NEXTCLOUD_PORT:-35234}:80"
     healthcheck:
       test: ["CMD-SHELL", "curl -fs http://localhost/status.php | grep -q '\"installed\":true'"]
       interval: 5s

@@ -24,31 +24,73 @@ type EventFields struct {
 	Start       time.Time
 	End         time.Time
 	AllDay      bool
+	// Recurrence is an RRULE value such as FREQ=WEEKLY;BYDAY=MO. A timed
+	// recurring event also needs Zone, the IANA zone it keeps its local time in.
+	Recurrence string
+	Zone       *time.Location
 }
 
-// BuildEvent encodes a single event. Timed events are stored in UTC, because
-// naming a zone would oblige them to carry its full definition, and without a
-// recurrence rule the instant is all that matters.
+// BuildEvent encodes an event. A single timed event is stored in UTC, because
+// naming a zone would oblige it to carry the zone's full definition, and without
+// a recurrence rule the instant is all that matters. A recurring timed event has
+// to stay at its local time across clock changes, so it is stored in its zone,
+// with a VTIMEZONE that RFC 5545 requires beside any TZID.
 func BuildEvent(uid string, fields EventFields, now time.Time) ([]byte, error) {
+	rule := ""
+	if fields.Recurrence != "" {
+		var err error
+		if rule, err = recurrenceRule(fields); err != nil {
+			return nil, err
+		}
+	}
 	event := goical.NewEvent()
 	event.Props.SetText(goical.PropUID, uid)
 	event.Props.SetDateTime(goical.PropDateTimeStamp, now.UTC())
 	setText(event.Component, goical.PropSummary, fields.Summary)
 	setText(event.Component, goical.PropLocation, fields.Location)
 	setText(event.Component, goical.PropDescription, fields.Description)
-	if fields.AllDay {
+	var vtimezone *goical.Component
+	switch {
+	case fields.AllDay:
 		event.Props.SetDate(goical.PropDateTimeStart, fields.Start)
 		event.Props.SetDate(goical.PropDateTimeEnd, fields.End)
-	} else {
+	case rule != "":
+		zone, err := recurrenceZone(fields)
+		if err != nil {
+			return nil, err
+		}
+		if vtimezone, err = buildTimezone(zone, fields.Start.In(zone)); err != nil {
+			return nil, err
+		}
+		event.Props.Set(zonedTime(goical.PropDateTimeStart, fields.Start, zone))
+		event.Props.Set(zonedTime(goical.PropDateTimeEnd, fields.End, zone))
+	default:
 		event.Props.SetDateTime(goical.PropDateTimeStart, fields.Start.UTC())
 		event.Props.SetDateTime(goical.PropDateTimeEnd, fields.End.UTC())
+	}
+	if rule != "" {
+		// Not text: escaping would turn the commas of BYDAY=MO,WE into \,.
+		prop := goical.NewProp(goical.PropRecurrenceRule)
+		prop.Value = rule
+		event.Props.Set(prop)
 	}
 
 	cal := goical.NewCalendar()
 	cal.Props.SetText(goical.PropVersion, "2.0")
 	cal.Props.SetText(goical.PropProductID, productID)
+	if vtimezone != nil {
+		cal.Children = append(cal.Children, vtimezone)
+	}
 	cal.Children = append(cal.Children, event.Component)
 	return encode(cal)
+}
+
+// zonedTime is a local date-time with its TZID.
+func zonedTime(name string, at time.Time, zone *time.Location) *goical.Prop {
+	prop := goical.NewProp(name)
+	prop.Value = at.In(zone).Format(localFormat)
+	prop.Params.Set(goical.PropTimezoneID, zone.String())
+	return prop
 }
 
 func encode(cal *goical.Calendar) ([]byte, error) {

@@ -248,7 +248,10 @@ func expandMaster(z *zones, event *goical.Event, overridden map[int64]bool, rang
 			if step >= maxRuleSteps {
 				return nil, ErrRuleTooExpensive
 			}
-			at, ok := next()
+			at, ok, err := nextInstance(next)
+			if err != nil {
+				return nil, err
+			}
 			if !ok || !at.Before(rangeEnd) {
 				break
 			}
@@ -264,6 +267,21 @@ func expandMaster(z *zones, event *goical.Event, overridden map[int64]bool, rang
 		}
 	}
 	return occurrences, nil
+}
+
+// ErrRuleUnusable means the recurrence library gave up on a rule.
+var ErrRuleUnusable = errors.New("the recurrence rule can't be worked out")
+
+// nextInstance asks a rule for its next instance. rrule-go panics on some rules
+// it accepted, such as one starting in the year 0, and rules come from strangers.
+func nextInstance(next rrule.Next) (at time.Time, ok bool, err error) {
+	defer func() {
+		if recover() != nil {
+			at, ok, err = time.Time{}, false, ErrRuleUnusable
+		}
+	}()
+	at, ok = next()
+	return at, ok, nil
 }
 
 // readEvent returns an event's shared fields, its start and its length.
@@ -282,7 +300,7 @@ func readEvent(z *zones, event *goical.Event) (Occurrence, time.Time, span, erro
 		return Occurrence{}, time.Time{}, span{}, err
 	}
 	template.AllDay = isDate
-	template.Timezone = zoneName(start.Location())
+	template.Timezone = ZoneName(start.Location())
 	return template, start, length, nil
 }
 

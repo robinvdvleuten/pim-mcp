@@ -26,6 +26,9 @@ func newStoreServer(t *testing.T, data string) *storeServer {
 	t.Helper()
 	store := &storeServer{etag: "v1", data: data}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveDiscovery(w, r, wideHome) {
+			return
+		}
 		switch r.Method {
 		case http.MethodGet:
 			if store.data == "" {
@@ -264,5 +267,93 @@ func TestDeleteOccurrenceOfFloatingSeriesUsesTheUsersZone(t *testing.T) {
 
 	if !strings.Contains(store.data, "EXDATE:20261109T090000\r\n") {
 		t.Errorf("stored %s", store.data)
+	}
+}
+
+func TestUpdateOfADeletedEventSaysItIsNotFound(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveDiscovery(w, r, wideHome) {
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	t.Cleanup(server.Close)
+	client, err := New(Config{URL: server.URL + "/"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = client.Update(t.Context(), "/cal/me/e.ics", "v1", []byte("data"))
+	if !errors.Is(err, ErrEventNotFound) {
+		t.Errorf("update: err = %v, want ErrEventNotFound", err)
+	}
+	// A create into a calendar that isn't there is not about an event.
+	_, err = client.Create(t.Context(), "/cal/me/e.ics", []byte("data"))
+	if err == nil || errors.Is(err, ErrEventNotFound) {
+		t.Errorf("create: err = %v", err)
+	}
+}
+
+func TestCreateRecurringEvent(t *testing.T) {
+	var header http.Header
+	var body string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveDiscovery(w, r, wideHome) {
+			return
+		}
+		data, _ := io.ReadAll(r.Body)
+		header, body = r.Header.Clone(), string(data)
+		w.Header().Set("ETag", `"e1"`)
+		w.WriteHeader(http.StatusCreated)
+	}))
+	t.Cleanup(server.Close)
+	client, err := New(Config{URL: server.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	amsterdam, _ := time.LoadLocation("Europe/Amsterdam")
+	fields := ical.EventFields{
+		Summary: "Standup", Recurrence: "FREQ=WEEKLY;BYDAY=MO", Zone: amsterdam,
+		Start: time.Date(2026, 10, 19, 9, 0, 0, 0, amsterdam), End: time.Date(2026, 10, 19, 9, 30, 0, 0, amsterdam),
+	}
+
+	got, err := client.CreateEvent(t.Context(), "/dav/home/user/work/", fields, time.UTC)
+
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if header.Get("If-None-Match") != "*" {
+		t.Errorf("If-None-Match = %q", header.Get("If-None-Match"))
+	}
+	if !strings.Contains(body, "DTSTART;TZID=Europe/Amsterdam:20261019T090000") || !strings.Contains(body, "BEGIN:VTIMEZONE") {
+		t.Errorf("stored:\n%s", body)
+	}
+	if !got.Recurring || !got.Start.Equal(fields.Start) || got.ETag != "e1" {
+		t.Errorf("event = %+v", got)
+	}
+}
+
+func TestCreateRecurringEventWithABadRuleSendsNothing(t *testing.T) {
+	var requests int
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { requests++ }))
+	t.Cleanup(server.Close)
+	client, err := New(Config{URL: server.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	amsterdam, _ := time.LoadLocation("Europe/Amsterdam")
+	start := time.Date(2026, 10, 20, 9, 0, 0, 0, amsterdam) // A Tuesday.
+
+	for name, fields := range map[string]ical.EventFields{
+		"another weekday": {Summary: "x", Start: start, End: start.Add(time.Hour), Zone: amsterdam, Recurrence: "FREQ=WEEKLY;BYDAY=MO"},
+		"no zone":         {Summary: "x", Start: start, End: start.Add(time.Hour), Recurrence: "FREQ=WEEKLY;BYDAY=TU"},
+		"hourly":          {Summary: "x", Start: start, End: start.Add(time.Hour), Zone: amsterdam, Recurrence: "FREQ=HOURLY"},
+	} {
+		if _, err := client.CreateEvent(t.Context(), "/dav/home/user/work/", fields, time.UTC); err == nil {
+			t.Errorf("%s: create succeeded", name)
+		}
+	}
+	if requests != 0 {
+		t.Errorf("sent %d requests", requests)
 	}
 }

@@ -231,7 +231,7 @@ func calendarSession(t *testing.T, s caldavServer) *mcp.ClientSession {
 	t.Helper()
 	server := mcpserver.New(mcpserver.Options{
 		Version: "test",
-		DialCalendar: func() (*calendar.Client, error) {
+		DialCalendar: func(string) (*calendar.Client, error) {
 			return calendar.New(calendar.Config{URL: s.url, Username: caldavUser, Password: caldavPassword})
 		},
 	})
@@ -584,6 +584,65 @@ func TestCalendarCreateAllDayEventRoundTrip(t *testing.T) {
 		events := eventsOf(got.Events, created.UID)
 		if len(events) != 1 || !events[0].AllDay || !events[0].End.Equal(time.Date(2029, 6, 13, 0, 0, 0, 0, time.UTC)) {
 			t.Errorf("events = %+v", events)
+		}
+	})
+}
+
+func TestCalendarCreateRecurringEventAcrossDST(t *testing.T) {
+	eachCalDAVServer(t, func(t *testing.T, s caldavServer, c *calendar.Client) {
+		session := calendarSession(t, s)
+		amsterdam, err := time.LoadLocation("Europe/Amsterdam")
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// The clocks go forward on Sunday 31 March 2030, between the second and third Monday.
+		created := callTool[calendar.Event](t, session, "calendar_create_event", map[string]any{
+			"calendar_id": s.calendar, "summary": "Weekly, in Amsterdam", "recurrence": "FREQ=WEEKLY;BYDAY=MO;COUNT=4",
+			"start": "2030-03-18T09:00", "end": "2030-03-18T09:30", "timezone": "Europe/Amsterdam",
+		})
+		if !created.Recurring || created.EventID == "" || created.ETag == "" {
+			t.Fatalf("created = %+v", created)
+		}
+
+		list := func() []calendar.Event {
+			got, err := c.Events(t.Context(), []string{s.calendar},
+				time.Date(2030, 3, 1, 0, 0, 0, 0, time.UTC), time.Date(2030, 5, 1, 0, 0, 0, 0, time.UTC), time.UTC)
+			if err != nil {
+				t.Fatalf("events: %v", err)
+			}
+			return eventsOf(got.Events, created.UID)
+		}
+		events := list()
+		if len(events) != 4 {
+			t.Fatalf("events = %+v", events)
+		}
+		wantUTC := []string{"08:00", "08:00", "07:00", "07:00"}
+		for i, e := range events {
+			if local := e.Start.In(amsterdam).Format("15:04"); local != "09:00" {
+				t.Errorf("occurrence %d is at %s in Amsterdam, want 09:00", i, local)
+			}
+			if utc := e.Start.UTC().Format("15:04"); utc != wantUTC[i] {
+				t.Errorf("occurrence %d is at %s UTC, want %s", i, utc, wantUTC[i])
+			}
+			if !e.Recurring || e.OccurrenceID == "" || e.Timezone != "Europe/Amsterdam" {
+				t.Errorf("occurrence %d = %+v", i, e)
+			}
+		}
+
+		// Delete the first one after the change.
+		callTool[calendar.DeletedEvent](t, session, "calendar_delete_event", map[string]any{
+			"event_id": created.EventID, "etag": events[2].ETag, "scope": "occurrence", "occurrence_id": events[2].OccurrenceID,
+		})
+
+		got := list()
+		if len(got) != 3 {
+			t.Fatalf("after delete: %+v", got)
+		}
+		for i, want := range []string{"2030-03-18", "2030-03-25", "2030-04-08"} {
+			if day := got[i].Start.In(amsterdam).Format(time.DateOnly); day != want || got[i].Start.In(amsterdam).Format("15:04") != "09:00" {
+				t.Errorf("occurrence %d = %s, want %s at 09:00", i, got[i].Start.In(amsterdam).Format(time.RFC3339), want)
+			}
 		}
 	})
 }

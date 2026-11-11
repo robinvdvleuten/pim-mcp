@@ -71,13 +71,7 @@ func (r davResponse) prop() davProp {
 // Calendars lists the user's calendars, sorted by name. It follows RFC 6764: the
 // URL leads to the user's principal, which leads to the home of their calendars.
 func (c *Client) Calendars(ctx context.Context) ([]Calendar, error) {
-	principal, err := c.findHref(ctx, c.base.Path, "<d:current-user-principal/>", "principal",
-		func(p davProp) string { return p.CurrentUserPrincipal.Value })
-	if err != nil {
-		return nil, err
-	}
-	home, err := c.findHref(ctx, principal, "<c:calendar-home-set/>", "calendar home",
-		func(p davProp) string { return p.CalendarHomeSet.Value })
+	home, err := c.homeSet(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -96,6 +90,11 @@ func (c *Client) Calendars(ctx context.Context) ([]Calendar, error) {
 		id, err := c.hrefPath(response.Href)
 		if err != nil {
 			return nil, err
+		}
+		// An ID that writes would refuse is no use to the caller. The home
+		// itself is skipped here too.
+		if !within(path.Clean(home), path.Clean(id), 1) {
+			continue
 		}
 		name := prop.DisplayName
 		if name == "" {

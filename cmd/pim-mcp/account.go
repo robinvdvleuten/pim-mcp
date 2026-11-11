@@ -25,23 +25,42 @@ func (c *cli) runAccount(ctx context.Context, args []string) int {
 	switch args[0] {
 	case "add":
 		return c.accountAdd(ctx, args[1:])
-	case "show", "remove", "test":
+	case "show":
 		if len(args) != 1 {
 			_, _ = fmt.Fprint(c.stderr, usage)
 			return 2
 		}
+		return c.accountShow()
+	case "test", "remove", "default":
+		email, ok := c.emailFlag(args[0], args[1:])
+		if !ok {
+			return 2
+		}
 		switch args[0] {
-		case "show":
-			return c.accountShow()
+		case "test":
+			return c.accountTest(ctx, email)
 		case "remove":
-			return c.accountRemove()
+			return c.accountRemove(email)
 		default:
-			return c.accountTest(ctx)
+			return c.accountDefault(email)
 		}
 	default:
 		_, _ = fmt.Fprint(c.stderr, usage)
 		return 2
 	}
+}
+
+// emailFlag reads the one flag these commands take. It prints the usage when
+// the arguments are not that.
+func (c *cli) emailFlag(command string, args []string) (string, bool) {
+	flags := flag.NewFlagSet("account "+command, flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	email := flags.String("email", "", "")
+	if err := flags.Parse(args); err != nil || flags.NArg() != 0 {
+		_, _ = fmt.Fprint(c.stderr, usage)
+		return "", false
+	}
+	return *email, true
 }
 
 func (c *cli) accountAdd(ctx context.Context, args []string) int {
@@ -61,12 +80,18 @@ func (c *cli) accountAdd(ctx context.Context, args []string) int {
 		return c.fail(errors.New("--email is required"))
 	}
 
-	existing, err := c.store.Load()
-	if err == nil {
-		return c.fail(fmt.Errorf("account %s already exists, run: pim-mcp account remove", existing.Email))
-	}
-	if !errors.Is(err, account.ErrNoAccount) {
+	existing, err := c.store.List()
+	if err != nil && !errors.Is(err, account.ErrNoAccount) {
 		return c.fail(err)
+	}
+	for _, other := range existing {
+		if strings.EqualFold(other.Email, *email) {
+			return c.fail(fmt.Errorf("account %s already exists, run: pim-mcp account remove --email %s", other.Email, other.Email))
+		}
+	}
+	// The environment password must not become a second account's password.
+	if err := account.CheckEnvForNewAccount(len(existing)); err != nil {
+		return c.fail(fmt.Errorf("can't add a second account: %w", err))
 	}
 
 	a := account.Account{
@@ -104,8 +129,9 @@ func (c *cli) accountAdd(ctx context.Context, args []string) int {
 	if err != nil {
 		return c.fail(err)
 	}
-	if err := c.store.Save(a); err != nil {
-		if storedPassword {
+	if err := c.store.Add(a); err != nil {
+		// A duplicate made by a racing command owns the password in the keychain.
+		if storedPassword && !errors.Is(err, account.ErrDuplicate) {
 			_ = account.DeletePassword(a.Email)
 		}
 		return c.fail(err)
@@ -159,22 +185,33 @@ func (c *cli) storePassword(email string) (bool, error) {
 	return true, nil
 }
 
+// accountShow lists every account and marks the default. With one account
+// there is nothing to mark, so the output is the plain block.
 func (c *cli) accountShow() int {
-	a, err := c.store.Load()
+	accounts, err := c.store.List()
 	if err != nil {
 		return c.fail(err)
 	}
-	_, err = fmt.Fprintf(c.stdout, "email:    %s\nusername: %s\nimap:     %s (%s)\ncaldav:   %s\npassword: %s\n",
-		a.Email, a.Username, a.IMAP.Addr, a.IMAP.Security, a.CalDAV.URL, passwordStatus(a.Email))
-	if err != nil {
-		return 1
+	for i, a := range accounts {
+		marker := ""
+		if len(accounts) > 1 && i == 0 {
+			marker = " (default)"
+		}
+		if i > 0 {
+			_, _ = fmt.Fprintln(c.stdout)
+		}
+		_, err = fmt.Fprintf(c.stdout, "email:    %s%s\nusername: %s\nimap:     %s (%s)\ncaldav:   %s\npassword: %s\n",
+			a.Email, marker, a.Username, a.IMAP.Addr, a.IMAP.Security, a.CalDAV.URL, passwordStatus(a.Email, len(accounts)))
+		if err != nil {
+			return 1
+		}
 	}
 	return 0
 }
 
 // passwordStatus describes where the password is, never what it is.
-func passwordStatus(email string) string {
-	_, source, err := account.Password(email)
+func passwordStatus(email string, accounts int) string {
+	_, source, err := account.Password(email, accounts)
 	switch {
 	case errors.Is(err, account.ErrNoPassword):
 		return "not found"
@@ -187,18 +224,49 @@ func passwordStatus(email string) string {
 	}
 }
 
-// accountTest logs in to each service and reports each result, so one broken
-// service doesn't hide the state of the other.
-func (c *cli) accountTest(ctx context.Context) int {
-	a, err := c.store.Load()
+// accountTest logs in to each service of each account and reports each result,
+// so one broken service doesn't hide the state of the others. email picks one
+// account.
+func (c *cli) accountTest(ctx context.Context, email string) int {
+	accounts, err := c.store.List()
 	if err != nil {
 		return c.fail(err)
 	}
-	password, _, err := account.Password(a.Email)
-	if err != nil {
-		return c.fail(err)
+	targets := accounts
+	if email != "" {
+		chosen, err := account.Select(accounts, email)
+		if err != nil {
+			return c.fail(err)
+		}
+		targets = []account.Account{chosen}
 	}
 
+	code := 0
+	for i, a := range targets {
+		// A single account prints as it always did, without a heading.
+		indent := ""
+		if len(targets) > 1 {
+			if i > 0 {
+				_, _ = fmt.Fprintln(c.stdout)
+			}
+			_, _ = fmt.Fprintf(c.stdout, "%s\n", a.Email)
+			indent = "  "
+		}
+		if c.testAccount(ctx, a, len(accounts), indent) != 0 {
+			code = 1
+		}
+	}
+	return code
+}
+
+func (c *cli) testAccount(ctx context.Context, a account.Account, accounts int, indent string) int {
+	password, _, err := account.Password(a.Email, accounts)
+	if err != nil {
+		if indent != "" {
+			err = fmt.Errorf("%s: %w", a.Email, err)
+		}
+		return c.fail(err)
+	}
 	code := 0
 	for _, check := range []struct {
 		label string
@@ -208,14 +276,14 @@ func (c *cli) accountTest(ctx context.Context) int {
 		{"caldav:", c.checkCalDAV},
 	} {
 		checkCtx, cancel := context.WithTimeout(ctx, checkTimeout)
-		err := check.run(checkCtx, a, password)
+		err := check.run(checkCtx, &a, password)
 		cancel()
 		if err != nil {
 			code = 1
-			_, _ = fmt.Fprintf(c.stdout, "%s failed: %v\n", check.label, err)
+			_, _ = fmt.Fprintf(c.stdout, "%s%s failed: %v\n", indent, check.label, err)
 			continue
 		}
-		_, _ = fmt.Fprintf(c.stdout, "%s ok\n", check.label)
+		_, _ = fmt.Fprintf(c.stdout, "%s%s ok\n", indent, check.label)
 	}
 	return code
 }
@@ -261,17 +329,47 @@ func calendarConfig(a *account.Account, password string) calendar.Config {
 	return calendar.Config{URL: a.CalDAV.URL, Username: a.Username, Password: password}
 }
 
-func (c *cli) accountRemove() int {
-	a, err := c.store.Load()
+// accountRemove removes one account. With a single account naming it is
+// optional, as it always was. With several it is required, as removing the
+// wrong one deletes its password too.
+func (c *cli) accountRemove(email string) int {
+	accounts, err := c.store.List()
 	if err != nil {
 		return c.fail(err)
 	}
-	if err := c.store.Remove(); err != nil {
+	if email == "" {
+		if len(accounts) > 1 {
+			return c.fail(fmt.Errorf("several accounts are configured, pass --email with one of: %s", strings.Join(account.Emails(accounts), ", ")))
+		}
+		email = accounts[0].Email
+	}
+	wasDefault := strings.EqualFold(accounts[0].Email, email)
+	removed, err := c.store.Remove(email)
+	if err != nil {
 		return c.fail(err)
 	}
-	if err := account.DeletePassword(a.Email); err != nil {
+	// The keychain entry is named by the address as it was stored.
+	if err := account.DeletePassword(removed.Email); err != nil {
 		return c.fail(fmt.Errorf("removed the account, but its password is still stored: %w", err))
 	}
-	_, _ = fmt.Fprintf(c.stdout, "Removed %s.\n", a.Email)
+	_, _ = fmt.Fprintf(c.stdout, "Removed %s.\n", removed.Email)
+	if wasDefault && len(accounts) > 1 {
+		_, _ = fmt.Fprintf(c.stdout, "The default account is now %s.\n", accounts[1].Email)
+	}
+	return 0
+}
+
+// accountDefault makes one account the default, the one tools use when the
+// agent names none.
+func (c *cli) accountDefault(email string) int {
+	if email == "" {
+		_, _ = fmt.Fprint(c.stderr, usage)
+		return 2
+	}
+	chosen, err := c.store.SetDefault(email)
+	if err != nil {
+		return c.fail(err)
+	}
+	_, _ = fmt.Fprintf(c.stdout, "The default account is now %s.\n", chosen.Email)
 	return 0
 }

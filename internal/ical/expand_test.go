@@ -239,3 +239,15 @@ func TestExpandKeepsWholeTextValues(t *testing.T) {
 		})
 	}
 }
+
+func TestMalformedInputIsAnErrorNotAPanic(t *testing.T) {
+	// Both were found by fuzzing: each made a library this package uses panic.
+	if _, err := Parse([]byte("0;0=")); err == nil {
+		t.Error("a parameter with no value parsed")
+	}
+	yearZero := "BEGIN:VCALENDAR\nVERSION:2.0\nBEGIN:VEVENT\nUID:x\nDTSTART:00001001T000000Z\n" +
+		"RRULE:FREQ=MONTHLY;BYMONTHDAY=01\nEND:VEVENT\nEND:VCALENDAR"
+	if _, err := ParseInvite([]byte(yearZero), time.UTC); err == nil {
+		t.Error("a rule starting in the year 0 was accepted")
+	}
+}

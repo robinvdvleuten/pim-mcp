@@ -24,7 +24,7 @@ func validAccount() Account {
 func TestStoreRoundTrip(t *testing.T) {
 	store := NewStore(t.TempDir())
 
-	if err := store.Save(validAccount()); err != nil {
+	if err := store.Add(validAccount()); err != nil {
 		t.Fatalf("save: %v", err)
 	}
 	got, err := store.Load()
@@ -53,7 +53,7 @@ func TestStoreKeepsFilesPrivate(t *testing.T) {
 	}
 	store := NewStore(dir)
 
-	if err := store.Save(validAccount()); err != nil {
+	if err := store.Add(validAccount()); err != nil {
 		t.Fatalf("save: %v", err)
 	}
 
@@ -77,7 +77,7 @@ func TestStoreLeavesNoTemporaryFiles(t *testing.T) {
 	dir := t.TempDir()
 	store := NewStore(dir)
 
-	if err := store.Save(validAccount()); err != nil {
+	if err := store.Add(validAccount()); err != nil {
 		t.Fatalf("save: %v", err)
 	}
 
@@ -91,9 +91,9 @@ func TestStoreLeavesNoTemporaryFiles(t *testing.T) {
 }
 
 func TestStoreFormatHoldsAListOfAccounts(t *testing.T) {
-	// Multiple accounts are planned. A list from the start avoids a migration.
+	// One account is a list of one, so a second needs no migration.
 	dir := t.TempDir()
-	if err := NewStore(dir).Save(validAccount()); err != nil {
+	if err := NewStore(dir).Add(validAccount()); err != nil {
 		t.Fatalf("save: %v", err)
 	}
 
@@ -108,11 +108,11 @@ func TestStoreFormatHoldsAListOfAccounts(t *testing.T) {
 
 func TestStoreRemove(t *testing.T) {
 	store := NewStore(t.TempDir())
-	if err := store.Save(validAccount()); err != nil {
+	if err := store.Add(validAccount()); err != nil {
 		t.Fatalf("save: %v", err)
 	}
 
-	if err := store.Remove(); err != nil {
+	if _, err := store.Remove("me@example.org"); err != nil {
 		t.Fatalf("remove: %v", err)
 	}
 
@@ -214,7 +214,7 @@ func TestPasswordFromKeychain(t *testing.T) {
 		t.Fatalf("save: %v", err)
 	}
 
-	password, source, err := Password("me@example.org")
+	password, source, err := Password("me@example.org", 1)
 	if err != nil {
 		t.Fatalf("password: %v", err)
 	}
@@ -228,7 +228,7 @@ func TestPasswordEnvironmentWinsAndAvoidsKeychain(t *testing.T) {
 	keyring.MockInitWithError(errors.New("no keychain in this container"))
 	t.Setenv(PasswordEnv, "from-env")
 
-	password, source, err := Password("me@example.org")
+	password, source, err := Password("me@example.org", 1)
 	if err != nil {
 		t.Fatalf("password: %v", err)
 	}
@@ -242,7 +242,7 @@ func TestPasswordMissing(t *testing.T) {
 	keyring.MockInit()
 	t.Setenv(PasswordEnv, "")
 
-	_, _, err := Password("me@example.org")
+	_, _, err := Password("me@example.org", 1)
 
 	if !errors.Is(err, ErrNoPassword) {
 		t.Errorf("err = %v, want ErrNoPassword", err)
@@ -256,7 +256,7 @@ func TestPasswordKeychainFailureIsNotHidden(t *testing.T) {
 	keyring.MockInitWithError(errors.New("keychain locked"))
 	t.Setenv(PasswordEnv, "")
 
-	_, _, err := Password("me@example.org")
+	_, _, err := Password("me@example.org", 1)
 
 	if err == nil || !strings.Contains(err.Error(), "keychain locked") {
 		t.Errorf("err = %v, want the keychain's error", err)

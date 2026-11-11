@@ -1,5 +1,5 @@
-// Package account stores the user's account: its endpoints in a config file
-// and its password in the OS keychain.
+// Package account stores the user's accounts: their endpoints in a config file
+// and their passwords in the OS keychain.
 package account
 
 import (
@@ -12,6 +12,8 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 
 	"github.com/robinvdvleuten/pim-mcp/internal/transport"
 )
@@ -92,7 +94,7 @@ func DefaultIMAPSecurity(addr string) string {
 	return SecurityStartTLS
 }
 
-// configFile holds a list so that adding accounts later needs no migration.
+// configFile holds a list of accounts. The first is the default.
 type configFile struct {
 	Accounts []Account `json:"accounts"`
 }
@@ -120,8 +122,12 @@ func (s *Store) path() string {
 	return filepath.Join(s.dir, "config.json")
 }
 
-// Load returns the configured account, or ErrNoAccount if there is none.
-func (s *Store) Load() (*Account, error) {
+// ErrDuplicate means an account with that email address exists already.
+var ErrDuplicate = errors.New("an account with that email address already exists")
+
+// List returns every configured account, the default first, or ErrNoAccount if
+// there is none.
+func (s *Store) List() ([]Account, error) {
 	data, err := os.ReadFile(s.path())
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, ErrNoAccount
@@ -136,13 +142,105 @@ func (s *Store) Load() (*Account, error) {
 	if len(file.Accounts) == 0 {
 		return nil, ErrNoAccount
 	}
-	return &file.Accounts[0], nil
+	return file.Accounts, nil
 }
 
-// Save writes the account. The file is replaced in one step, so a failure
-// can't leave a half-written config behind.
-func (s *Store) Save(a Account) error {
-	data, err := json.MarshalIndent(configFile{Accounts: []Account{a}}, "", "  ")
+// Load returns the default account, or ErrNoAccount if there is none.
+func (s *Store) Load() (*Account, error) {
+	accounts, err := s.List()
+	if err != nil {
+		return nil, err
+	}
+	return &accounts[0], nil
+}
+
+// Emails lists the addresses of accounts, for messages that name them.
+func Emails(accounts []Account) []string {
+	emails := make([]string, len(accounts))
+	for i, a := range accounts {
+		emails[i] = a.Email
+	}
+	return emails
+}
+
+func errUnknown(accounts []Account, email string) error {
+	return fmt.Errorf("no account %q, the configured accounts are: %s", email, strings.Join(Emails(accounts), ", "))
+}
+
+func indexOf(accounts []Account, email string) int {
+	return slices.IndexFunc(accounts, func(a Account) bool { return strings.EqualFold(a.Email, email) })
+}
+
+// Select returns the account with that email address, in any letter case, or
+// the default account for an empty one. An unknown address is an error that
+// names the configured ones.
+func Select(accounts []Account, email string) (Account, error) {
+	if len(accounts) == 0 {
+		return Account{}, ErrNoAccount
+	}
+	if email == "" {
+		return accounts[0], nil
+	}
+	i := indexOf(accounts, email)
+	if i < 0 {
+		return Account{}, errUnknown(accounts, email)
+	}
+	return accounts[i], nil
+}
+
+// Add appends an account, so the first one stays the default. A second account
+// with the same email address, in any letter case, is refused.
+func (s *Store) Add(a Account) error {
+	accounts, err := s.List()
+	if err != nil && !errors.Is(err, ErrNoAccount) {
+		return err
+	}
+	if indexOf(accounts, a.Email) >= 0 {
+		return fmt.Errorf("%w: %s", ErrDuplicate, a.Email)
+	}
+	return s.write(append(accounts, a))
+}
+
+// Remove deletes the account with that email address. When it was the last one,
+// the file goes too. It returns the account as it was stored.
+func (s *Store) Remove(email string) (Account, error) {
+	accounts, err := s.List()
+	if err != nil {
+		return Account{}, err
+	}
+	i := indexOf(accounts, email)
+	if i < 0 {
+		return Account{}, errUnknown(accounts, email)
+	}
+	removed := accounts[i]
+	if len(accounts) == 1 {
+		if err := os.Remove(s.path()); err != nil {
+			return Account{}, fmt.Errorf("remove config: %w", err)
+		}
+		return removed, nil
+	}
+	return removed, s.write(slices.Delete(slices.Clone(accounts), i, i+1))
+}
+
+// SetDefault moves the account with that email address to the front.
+func (s *Store) SetDefault(email string) (Account, error) {
+	accounts, err := s.List()
+	if err != nil {
+		return Account{}, err
+	}
+	i := indexOf(accounts, email)
+	if i < 0 {
+		return Account{}, errUnknown(accounts, email)
+	}
+	chosen := accounts[i]
+	rest := slices.Delete(slices.Clone(accounts), i, i+1)
+	return chosen, s.write(append([]Account{chosen}, rest...))
+}
+
+// write replaces the file in one step, so a failure can't leave a half-written
+// config behind.
+func (s *Store) write(accounts []Account) error {
+	data, err := json.MarshalIndent(configFile{Accounts: accounts}, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encode config: %w", err)
 	}
@@ -168,18 +266,6 @@ func (s *Store) Save(a Account) error {
 	}
 	if err := os.Rename(temp.Name(), s.path()); err != nil {
 		return fmt.Errorf("write config: %w", err)
-	}
-	return nil
-}
-
-// Remove deletes the config file.
-func (s *Store) Remove() error {
-	err := os.Remove(s.path())
-	if errors.Is(err, fs.ErrNotExist) {
-		return ErrNoAccount
-	}
-	if err != nil {
-		return fmt.Errorf("remove config: %w", err)
 	}
 	return nil
 }

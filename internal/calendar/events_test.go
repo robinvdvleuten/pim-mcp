@@ -6,7 +6,9 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -27,11 +29,33 @@ func eventResponse(href, etag, data string) string {
 </d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>`, href, etag, data)
 }
 
+// bodyLog collects request bodies. Requests to a server arrive concurrently, and
+// in no fixed order.
+type bodyLog struct {
+	mu     sync.Mutex
+	bodies []string
+}
+
+func (l *bodyLog) add(body string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.bodies = append(l.bodies, body)
+}
+
+func (l *bodyLog) all() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return slices.Clone(l.bodies)
+}
+
 // reportServer answers REPORT per calendar path and records the requests.
-func reportServer(t *testing.T, responses map[string]string) (*Client, *[]string) {
+func reportServer(t *testing.T, responses map[string]string) (*Client, *bodyLog) {
 	t.Helper()
-	var bodies []string
+	bodies := &bodyLog{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveDiscovery(w, r, wideHome) {
+			return
+		}
 		if r.Method != "REPORT" {
 			t.Errorf("method = %s", r.Method)
 		}
@@ -39,7 +63,7 @@ func reportServer(t *testing.T, responses map[string]string) (*Client, *[]string
 			t.Errorf("depth = %q", r.Header.Get("Depth"))
 		}
 		body, _ := io.ReadAll(r.Body)
-		bodies = append(bodies, string(body))
+		bodies.add(string(body))
 		response, ok := responses[r.URL.Path]
 		if !ok {
 			w.WriteHeader(http.StatusNotFound)
@@ -53,7 +77,7 @@ func reportServer(t *testing.T, responses map[string]string) (*Client, *[]string
 	if err != nil {
 		t.Fatal(err)
 	}
-	return client, &bodies
+	return client, bodies
 }
 
 var (
@@ -96,10 +120,15 @@ func TestEventsAsksTheServerForAWiderRange(t *testing.T) {
 		t.Fatalf("events: %v", err)
 	}
 
-	if len(*bodies) != 2 {
-		t.Fatalf("requests = %d", len(*bodies))
+	requests := bodies.all()
+	if len(requests) != 2 {
+		t.Fatalf("requests = %d", len(requests))
 	}
-	body := (*bodies)[0]
+	// The two queries run together, so find the one with the range.
+	body := requests[0]
+	if !strings.Contains(body, "time-range") {
+		body = requests[1]
+	}
 	for _, want := range []string{`start="20261109T000000Z"`, `end="20261112T000000Z"`, `name="VEVENT"`, "calendar-data", "getetag"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("request %q doesn't contain %q", body, want)
@@ -194,8 +223,8 @@ func TestEventsRefusesBadRangesWithoutAsking(t *testing.T) {
 	if !errors.Is(err, ical.ErrRangeTooLarge) {
 		t.Errorf("err = %v, want ErrRangeTooLarge", err)
 	}
-	if len(*bodies) != 0 {
-		t.Errorf("sent %d requests", len(*bodies))
+	if n := len(bodies.all()); n != 0 {
+		t.Errorf("sent %d requests", n)
 	}
 }
 
@@ -240,6 +269,9 @@ func TestCreateEventRefusesBadFieldsWithoutWriting(t *testing.T) {
 
 func TestOversizedResponsesAreRefused(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveDiscovery(w, r, wideHome) {
+			return
+		}
 		if r.Method != http.MethodGet {
 			w.WriteHeader(http.StatusMultiStatus)
 		}
@@ -251,7 +283,7 @@ func TestOversizedResponsesAreRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := client.Get(t.Context(), "/event.ics"); !errors.Is(err, ErrResponseTooLarge) {
+	if _, err := client.Get(t.Context(), "/cal/event.ics"); !errors.Is(err, ErrResponseTooLarge) {
 		t.Errorf("get: err = %v, want ErrResponseTooLarge", err)
 	}
 	if _, err := client.Events(t.Context(), []string{"/cal/"}, rangeStart, rangeEnd, time.UTC); !errors.Is(err, ErrResponseTooLarge) {
@@ -267,8 +299,11 @@ func TestEventsAlsoAsksForEventsWithChangedOccurrences(t *testing.T) {
 		t.Fatalf("events: %v", err)
 	}
 
-	if len(*bodies) != 2 || !strings.Contains((*bodies)[1], `prop-filter name="RECURRENCE-ID"`) {
-		t.Errorf("requests = %q", *bodies)
+	requests := bodies.all()
+	if len(requests) != 2 || !slices.ContainsFunc(requests, func(body string) bool {
+		return strings.Contains(body, `prop-filter name="RECURRENCE-ID"`)
+	}) {
+		t.Errorf("requests = %q", requests)
 	}
 	if len(got.Events) != 1 {
 		t.Errorf("events = %+v, want one found by both queries to appear once", got.Events)

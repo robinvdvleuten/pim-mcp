@@ -11,10 +11,12 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"regexp"
 	"runtime/debug"
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -30,9 +32,10 @@ const usage = `usage:
   pim-mcp account add --email ADDRESS [--username NAME] [--imap HOST:PORT]
                       [--imap-security tls|starttls|none] [--caldav URL]
                       [--no-ispdb]
-  pim-mcp account show
-  pim-mcp account test
-  pim-mcp account remove
+  pim-mcp account show                               list the accounts; the first is the default
+  pim-mcp account test [--email ADDRESS]             log in to all accounts, or one
+  pim-mcp account remove [--email ADDRESS]           --email is needed with several accounts
+  pim-mcp account default --email ADDRESS            make an account the default
   pim-mcp serve [--read-only] [--tools NAME,NAME]    run the MCP server over stdio
   pim-mcp version                                    print the build revision
 `
@@ -60,6 +63,19 @@ type cli struct {
 	checkCalDAV    func(context.Context, *account.Account, string) error
 	readPassword   func() (string, error)
 	confirm        func() (bool, error)
+
+	// dialIMAP opens a mail connection. It is mail.Dial unless a test replaces it.
+	dialIMAP func(context.Context, mail.Config) (*mail.Client, error)
+
+	// calendarClients holds each account's last calendar client, by email
+	// address, with the config it was built from. See dialCalendar.
+	calendarMu      sync.Mutex
+	calendarClients map[string]cachedCalendar
+}
+
+type cachedCalendar struct {
+	config calendar.Config
+	client *calendar.Client
 }
 
 type discoverer interface {
@@ -162,7 +178,7 @@ func (c *cli) runServe(ctx context.Context, args []string, version string) int {
 		Tools:        allowed,
 		Version:      version,
 		ReadOnly:     readOnly,
-		Account:      c.loadAccount,
+		Accounts:     c.loadAccounts,
 		DialMail:     c.dialMail,
 		DialCalendar: c.dialCalendar,
 	}
@@ -188,39 +204,77 @@ func parseTools(value string) ([]string, error) {
 	return names, nil
 }
 
-func (c *cli) loadAccount() (*account.Account, error) {
+func (c *cli) loadAccounts() ([]account.Account, error) {
 	if c.store == nil {
 		return nil, errNoConfigDir
 	}
-	return c.store.Load()
+	return c.store.List()
 }
 
-func (c *cli) dialMail(ctx context.Context) (*mail.Client, error) {
-	a, password, err := c.credentials()
+// dialMail connects to the mail server of the account with that email address,
+// with that account's username and password and no other's.
+func (c *cli) dialMail(ctx context.Context, email string) (*mail.Client, error) {
+	a, password, _, err := c.credentials(email)
 	if err != nil {
 		return nil, err
 	}
-	return mail.Dial(ctx, mailConfig(a, password))
+	dial := c.dialIMAP
+	if dial == nil {
+		dial = mail.Dial
+	}
+	return dial(ctx, mailConfig(&a, password))
 }
 
-func (c *cli) dialCalendar() (*calendar.Client, error) {
-	a, password, err := c.credentials()
+// dialCalendar reads the accounts and the password on every call, as either may
+// change while the server runs. An account's client is only reused while they
+// produce the same config for it, so its connections and its calendar home are
+// kept across calls. The clients are kept per email address, so one account is
+// never handed another's, whatever their config has in common.
+func (c *cli) dialCalendar(email string) (*calendar.Client, error) {
+	a, password, accounts, err := c.credentials(email)
 	if err != nil {
 		return nil, err
 	}
-	return calendar.New(calendarConfig(a, password))
+	config := calendarConfig(&a, password)
+
+	c.calendarMu.Lock()
+	defer c.calendarMu.Unlock()
+	// Forget removed accounts, so the map can't grow without bound.
+	for key := range c.calendarClients {
+		if !slices.Contains(account.Emails(accounts), key) {
+			delete(c.calendarClients, key)
+		}
+	}
+	if kept, ok := c.calendarClients[a.Email]; ok && kept.config == config {
+		return kept.client, nil
+	}
+	client, err := calendar.New(config)
+	if err != nil {
+		return nil, err
+	}
+	if c.calendarClients == nil {
+		c.calendarClients = map[string]cachedCalendar{}
+	}
+	c.calendarClients[a.Email] = cachedCalendar{config: config, client: client}
+	return client, nil
 }
 
-func (c *cli) credentials() (*account.Account, string, error) {
-	a, err := c.loadAccount()
+// credentials finds the account with that email address (the default for an
+// empty one) and its password. It also returns every account.
+func (c *cli) credentials(email string) (account.Account, string, []account.Account, error) {
+	accounts, err := c.loadAccounts()
 	if err != nil {
-		return nil, "", err
+		return account.Account{}, "", nil, err
 	}
-	password, _, err := account.Password(a.Email)
+	a, err := account.Select(accounts, email)
 	if err != nil {
-		return nil, "", err
+		return account.Account{}, "", nil, err
 	}
-	return a, password, nil
+	password, _, err := account.Password(a.Email, len(accounts))
+	if err != nil {
+		return account.Account{}, "", nil, err
+	}
+	return a, password, accounts, nil
 }
 
 // readOnlyFromEnv refuses a value it can't read, rather than guess which way
@@ -254,11 +308,28 @@ func serve(ctx context.Context, options mcpserver.Options, stderr io.Writer) err
 	return nil
 }
 
-// versionString prefers the VCS revision because the project has no tags.
-// Binaries from `go install` carry no VCS settings, only a module version.
+// pseudoVersion matches the module versions the go command invents for
+// untagged commits, with or without a +dirty suffix. Before any tag they look
+// like v0.0.0-20261105160743-0a9722d511fa, and after one like
+// v0.1.1-0.20261105160743-0a9722d511fa.
+var pseudoVersion = regexp.MustCompile(`[-.]\d{14}-[0-9a-f]{12}(\+dirty)?$`)
+
+// versionString reports the release tag when the binary was built from one,
+// either by `go install module@version` or from a tagged checkout. Otherwise it
+// reports the VCS revision. The go command stamps untagged builds with a
+// pseudo-version, which says less than the full revision, so it only serves as
+// a last resort for binaries without VCS settings.
 func versionString(info *debug.BuildInfo) string {
 	if info == nil {
 		return "unknown"
+	}
+
+	module := info.Main.Version
+	if module == "(devel)" {
+		module = ""
+	}
+	if module != "" && !pseudoVersion.MatchString(module) {
+		return module
 	}
 
 	var revision string
@@ -277,8 +348,8 @@ func versionString(info *debug.BuildInfo) string {
 		return revision + "-dirty"
 	case revision != "":
 		return revision
-	case info.Main.Version != "" && info.Main.Version != "(devel)":
-		return info.Main.Version
+	case module != "":
+		return module
 	default:
 		return "unknown"
 	}

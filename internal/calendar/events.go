@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/robinvdvleuten/pim-mcp/internal/ical"
@@ -42,7 +44,17 @@ func (c *Client) Events(ctx context.Context, calendarIDs []string, start, end ti
 	if err := ical.CheckRange(start, end); err != nil {
 		return nil, err
 	}
-	if len(calendarIDs) == 0 {
+	if len(calendarIDs) > 0 {
+		// All of them are checked before the first one is queried.
+		checked := make([]string, len(calendarIDs))
+		for i, id := range calendarIDs {
+			var err error
+			if checked[i], err = c.calendarPath(ctx, id); err != nil {
+				return nil, err
+			}
+		}
+		calendarIDs = checked
+	} else {
 		calendars, err := c.Calendars(ctx)
 		if err != nil {
 			return nil, err
@@ -52,14 +64,30 @@ func (c *Client) Events(ctx context.Context, calendarIDs []string, start, end ti
 		}
 	}
 
+	// Each calendar fills its own slot, and the slots are joined in the order
+	// given, so the answer doesn't depend on which request finishes first.
+	parts := make([]*EventList, len(calendarIDs))
+	var total atomic.Int64
+	err := forEach(ctx, maxCalendarsInFlight, len(calendarIDs), func(ctx context.Context, i int) error {
+		part, err := c.collectEvents(ctx, calendarIDs[i], start, end, loc)
+		if err != nil {
+			return err
+		}
+		// Stop the others as soon as the whole answer is known to be too big.
+		if total.Add(int64(len(part.Events))) > ical.MaxOccurrences {
+			return ical.ErrTooManyOccurrences
+		}
+		parts[i] = part
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
 	list := &EventList{Events: []Event{}, Skipped: []SkippedEvent{}}
-	for _, calendarID := range calendarIDs {
-		if err := c.collectEvents(ctx, list, calendarID, start, end, loc); err != nil {
-			return nil, err
-		}
-		if len(list.Events) > ical.MaxOccurrences {
-			return nil, ical.ErrTooManyOccurrences
-		}
+	for _, part := range parts {
+		list.Events = append(list.Events, part.Events...)
+		list.Skipped = append(list.Skipped, part.Skipped...)
 	}
 	slices.SortStableFunc(list.Events, func(a, b Event) int {
 		if order := a.Start.Compare(b.Start); order != 0 {
@@ -70,10 +98,76 @@ func (c *Client) Events(ctx context.Context, calendarIDs []string, start, end ti
 	return list, nil
 }
 
-func (c *Client) collectEvents(ctx context.Context, list *EventList, calendarID string, start, end time.Time, loc *time.Location) error {
+// maxCalendarsInFlight bounds how many calendars are read at once, so a user
+// with many calendars neither floods the server nor holds all their answers in
+// memory at the same time.
+const maxCalendarsInFlight = 4
+
+// forEach runs fn for 0..n-1 with at most limit running at once. It returns the
+// failure with the lowest index, whichever happened first. So that this holds,
+// a failure cancels only the calls after it: the ones before it run to the end,
+// as one of them may fail too.
+func forEach(ctx context.Context, limit, n int, fn func(ctx context.Context, i int) error) error {
+	var (
+		mu      sync.Mutex
+		cancels = make([]context.CancelFunc, n)
+		failed  = n // The lowest index that has failed so far.
+		errs    = make([]error, n)
+		slots   = make(chan struct{}, limit)
+		wg      sync.WaitGroup
+	)
+	for i := range n {
+		select {
+		case slots <- struct{}{}:
+		case <-ctx.Done():
+		}
+		mu.Lock()
+		if ctx.Err() != nil || i > failed {
+			mu.Unlock()
+			if ctx.Err() == nil {
+				<-slots
+			}
+			break
+		}
+		callCtx, cancel := context.WithCancel(ctx)
+		cancels[i] = cancel
+		mu.Unlock()
+
+		wg.Go(func() {
+			defer func() { <-slots }()
+			defer cancel()
+			err := fn(callCtx, i)
+			if err == nil {
+				return
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			errs[i] = err
+			if i < failed {
+				failed = i
+				for _, later := range cancels[i+1:] {
+					if later != nil {
+						later()
+					}
+				}
+			}
+		})
+	}
+	wg.Wait()
+
+	for _, err := range errs {
+		if err != nil {
+			return err
+		}
+	}
+	return ctx.Err()
+}
+
+func (c *Client) collectEvents(ctx context.Context, calendarID string, start, end time.Time, loc *time.Location) (*EventList, error) {
+	list := &EventList{Events: []Event{}, Skipped: []SkippedEvent{}}
 	responses, err := c.queryEvents(ctx, calendarID, start, end)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	for _, response := range responses {
 		eventID, err := c.hrefPath(response.Href)
@@ -84,7 +178,7 @@ func (c *Client) collectEvents(ctx context.Context, list *EventList, calendarID 
 		prop := response.prop()
 		occurrences, err := expandObject(prop.CalendarData, start, end, loc)
 		if errors.Is(err, ical.ErrTooManyOccurrences) {
-			return err
+			return nil, err
 		}
 		if err != nil {
 			list.Skipped = append(list.Skipped, SkippedEvent{EventID: eventID, Reason: err.Error()})
@@ -99,7 +193,7 @@ func (c *Client) collectEvents(ctx context.Context, list *EventList, calendarID 
 			})
 		}
 	}
-	return nil
+	return list, nil
 }
 
 func expandObject(data string, start, end time.Time, loc *time.Location) ([]ical.Occurrence, error) {
@@ -117,20 +211,26 @@ func expandObject(data string, start, end time.Time, loc *time.Location) ([]ical
 // reads floating times in a zone of its own. Expanding then gets it exact. It also
 // asks for every event with a changed occurrence, whatever its dates: Nextcloud's
 // range filter goes by the series, and misses an occurrence moved outside of it.
+// The two requests are independent, so they run together.
 func (c *Client) queryEvents(ctx context.Context, calendarID string, start, end time.Time) ([]davResponse, error) {
-	inRange, err := c.reportEvents(ctx, calendarID, fmt.Sprintf(`<c:time-range start="%s" end="%s"/>`,
-		start.UTC().AddDate(0, 0, -1).Format(timeRangeFormat),
-		end.UTC().AddDate(0, 0, 1).Format(timeRangeFormat)))
-	if err != nil {
-		return nil, err
+	filters := [2]string{
+		fmt.Sprintf(`<c:time-range start="%s" end="%s"/>`,
+			start.UTC().AddDate(0, 0, -1).Format(timeRangeFormat),
+			end.UTC().AddDate(0, 0, 1).Format(timeRangeFormat)),
+		`<c:prop-filter name="RECURRENCE-ID"/>`,
 	}
-	withOverrides, err := c.reportEvents(ctx, calendarID, `<c:prop-filter name="RECURRENCE-ID"/>`)
+	var found [2][]davResponse
+	err := forEach(ctx, len(filters), len(filters), func(ctx context.Context, i int) error {
+		var err error
+		found[i], err = c.reportEvents(ctx, calendarID, filters[i])
+		return err
+	})
 	if err != nil {
 		return nil, err
 	}
 	seen := map[string]bool{}
 	var responses []davResponse
-	for _, response := range slices.Concat(inRange, withOverrides) {
+	for _, response := range slices.Concat(found[0], found[1]) {
 		if !seen[response.Href] {
 			seen[response.Href] = true
 			responses = append(responses, response)
@@ -151,6 +251,10 @@ func (c *Client) reportEvents(ctx context.Context, calendarID, filter string) ([
 // comes from an invite, so it's escaped for the query and compared again on the
 // way back, as a server's text-match need not be exact.
 func (c *Client) FindByUID(ctx context.Context, calendarID, uid string) (*Object, error) {
+	calendarID, err := c.calendarPath(ctx, calendarID)
+	if err != nil {
+		return nil, err
+	}
 	var escaped strings.Builder
 	if err := xml.EscapeText(&escaped, []byte(uid)); err != nil {
 		return nil, fmt.Errorf("escape UID: %w", err)

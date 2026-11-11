@@ -22,10 +22,13 @@ import (
 // Debug logging is what someone turns on to chase a problem, and pastes into a bug
 // report. It runs the real binary against real servers.
 func TestDebugLogsHoldNoSecretsOrContent(t *testing.T) {
-	const (
-		body    = "the-secret-body-of-this-message"
-		subject = "the-private-subject"
-		summary = "the-private-event"
+	// The mailbox and the calendar outlive a run, so this run's data is told
+	// apart by a mark of its own.
+	mark := newUID(t)
+	var (
+		body    = "the-secret-body-of-this-message-" + mark
+		subject = "the-private-subject-" + mark
+		summary = "the-private-event-" + mark
 	)
 	s := caldavServers[0]
 	createRadicaleCalendar(t, s)
@@ -51,8 +54,11 @@ func TestDebugLogsHoldNoSecretsOrContent(t *testing.T) {
 		t.Fatalf("connect: %v", err)
 	}
 
-	id := firstMessageID(t, session)
-	got := callTool[map[string]any](t, session, "mail_get", map[string]any{"id": id})
+	found := callTool[mcpserver.SearchResult](t, session, "mail_search", map[string]any{"subject": subject})
+	if len(found.Messages) != 1 {
+		t.Fatalf("messages = %+v", found.Messages)
+	}
+	got := callTool[map[string]any](t, session, "mail_get", map[string]any{"id": found.Messages[0].ID})
 	if !strings.Contains(got["body"].(string), body) {
 		t.Errorf("mail_get didn't return the body: %v", got)
 	}

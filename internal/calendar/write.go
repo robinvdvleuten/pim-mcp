@@ -11,9 +11,13 @@ import (
 	"github.com/robinvdvleuten/pim-mcp/internal/ical"
 )
 
-// CreateEvent adds a new single event to a calendar.
+// CreateEvent adds a new event to a calendar, recurring if the fields say so.
 func (c *Client) CreateEvent(ctx context.Context, calendarID string, fields ical.EventFields, loc *time.Location) (*Event, error) {
 	if err := checkFields(fields); err != nil {
+		return nil, err
+	}
+	calendarID, err := c.calendarPath(ctx, calendarID)
+	if err != nil {
 		return nil, err
 	}
 	random := make([]byte, 16)
@@ -37,7 +41,10 @@ func checkFields(fields ical.EventFields) error {
 	if strings.TrimSpace(fields.Summary) == "" {
 		return fmt.Errorf("an event needs a summary")
 	}
-	return ical.CheckRange(fields.Start, fields.End)
+	if err := ical.CheckRange(fields.Start, fields.End); err != nil {
+		return err
+	}
+	return ical.CheckRecurrence(fields)
 }
 
 // storedEvent reads back what was written, so the answer shows the event the way
@@ -121,6 +128,10 @@ func (c *Client) UpdateEvent(ctx context.Context, eventID, etag, scope, occurren
 	if err := checkScope(scope, occurrenceID); err != nil {
 		return nil, err
 	}
+	eventID, err := c.eventPath(ctx, eventID)
+	if err != nil {
+		return nil, err
+	}
 	object, err := c.current(ctx, eventID, etag)
 	if err != nil {
 		return nil, err
@@ -153,6 +164,10 @@ func (c *Client) DeleteEvent(ctx context.Context, eventID, etag, scope, occurren
 	}
 	if etag == "" {
 		return nil, fmt.Errorf("event %s: an etag is required", eventID)
+	}
+	eventID, err := c.eventPath(ctx, eventID)
+	if err != nil {
+		return nil, err
 	}
 	if scope == ScopeSeries {
 		if err := c.Delete(ctx, eventID, etag); err != nil {

@@ -36,13 +36,13 @@ type caldavServer struct {
 var caldavServers = []caldavServer{
 	{
 		name:     "radicale",
-		url:      "http://127.0.0.1:35232/",
+		url:      radicaleURL,
 		calendar: "/tester/default/",
 		setup:    createRadicaleCalendar,
 	},
 	{
 		name:     "baikal",
-		url:      "http://127.0.0.1:35233/dav.php/",
+		url:      baikalURL + "dav.php/",
 		calendar: "/dav.php/calendars/tester/default/",
 	},
 }
@@ -52,7 +52,7 @@ func init() {
 	if os.Getenv("PIM_MCP_TEST_NEXTCLOUD") != "" {
 		caldavServers = append(caldavServers, caldavServer{
 			name:     "nextcloud",
-			url:      "http://127.0.0.1:35234/remote.php/dav/",
+			url:      nextcloudURL + "remote.php/dav/",
 			calendar: "/remote.php/dav/calendars/tester/personal/",
 		})
 	}
@@ -330,10 +330,10 @@ func TestCalendarsFoundFromDiscoveredURLs(t *testing.T) {
 		url  string
 		want string
 	}{
-		{"radicale root", "http://127.0.0.1:35232/", "/tester/default/"},
-		{"radicale user path", "http://127.0.0.1:35232/tester/", "/tester/default/"},
-		{"baikal without trailing slash", "http://127.0.0.1:35233/dav.php", "/dav.php/calendars/tester/default/"},
-		{"baikal with trailing slash", "http://127.0.0.1:35233/dav.php/", "/dav.php/calendars/tester/default/"},
+		{"radicale root", radicaleURL, "/tester/default/"},
+		{"radicale user path", radicaleURL + "tester/", "/tester/default/"},
+		{"baikal without trailing slash", baikalURL + "dav.php", "/dav.php/calendars/tester/default/"},
+		{"baikal with trailing slash", baikalURL + "dav.php/", "/dav.php/calendars/tester/default/"},
 	}
 
 	for _, tt := range tests {

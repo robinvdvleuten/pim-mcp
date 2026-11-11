@@ -18,11 +18,7 @@ import (
 	"github.com/robinvdvleuten/pim-mcp/internal/mail"
 )
 
-const (
-	dovecotPlainAddr = "127.0.0.1:31143"
-	dovecotTLSAddr   = "127.0.0.1:31993"
-	dovecotPassword  = "test-password"
-)
+const dovecotPassword = "test-password"
 
 const icsBody = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nMETHOD:REQUEST\r\nEND:VCALENDAR\r\n"
 

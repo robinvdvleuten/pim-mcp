@@ -386,7 +386,7 @@ func TestImportSendsNoSchedulingReply(t *testing.T) {
 	plainPut := func(path string, lines []string) {
 		t.Helper()
 		body := strings.Join(append(append([]string{"BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//t//t//EN"}, lines...), "END:VCALENDAR", ""), "\r\n")
-		req, err := http.NewRequestWithContext(t.Context(), http.MethodPut, "http://127.0.0.1:35233"+path, strings.NewReader(body))
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodPut, strings.TrimSuffix(baikalURL, "/")+path, strings.NewReader(body))
 		if err != nil {
 			t.Fatal(err)
 		}

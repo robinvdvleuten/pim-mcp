@@ -1,0 +1,15 @@
+{
+  "release-type": "go",
+  "bump-minor-pre-major": true,
+  "pull-request-title-pattern": "chore: release ${version}",
+  "packages": {
+    ".": {}
+  },
+  "extra-files": [
+    {
+      "type": "json",
+      "path": "server.json",
+      "jsonpath": "$.version"
+    }
+  ]
+}

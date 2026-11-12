@@ -2,9 +2,11 @@
 go = '1.27.4'
 golangci-lint = '2.14.0'
 vale = '3.25.1'
+zizmor = '1.32.0'
 
-# Points git at the tracked hooks in .githooks (commit message linting)
-# and fetches the Vale packages they use.
+# Points git at the tracked hooks in .githooks (commit message linting, and a
+# zizmor audit when a commit changes .github/) and fetches the Vale packages
+# they use.
 [tasks.setup]
 description = "Install git hooks and Vale packages"
 run = [

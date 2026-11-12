@@ -1,0 +1,17 @@
+#!/bin/sh
+# Audits the GitHub Actions workflows with zizmor when a commit changes
+# anything under .github/. Installed by `mise run setup`; bypass once with
+# `git commit --no-verify`.
+set -e
+
+git diff --cached --quiet -- .github/ && exit 0
+
+if ! command -v zizmor >/dev/null 2>&1; then
+  echo "pre-commit: zizmor is not installed; run 'mise install'." >&2
+  echo "pre-commit: or bypass once with 'git commit --no-verify'." >&2
+  exit 1
+fi
+
+cd "$(git rev-parse --show-toplevel)"
+# Offline keeps the hook fast and needs no token; CI runs the online audits.
+zizmor --offline --quiet --no-progress .

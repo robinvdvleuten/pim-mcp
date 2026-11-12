@@ -28,7 +28,7 @@ jobs:
 
   # Run after a failed matrix so branch protection sees a failure, not a skip.
   test-status:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     needs: [test]
     if: ${{ always() }}
     steps:

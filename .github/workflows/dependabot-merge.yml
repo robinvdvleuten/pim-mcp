@@ -11,7 +11,7 @@ jobs:
   # Turns on auto-merge for Dependabot PRs, so they squash into main once the
   # required checks pass. Needs "Allow auto-merge" in the repository settings.
   dependabot:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     if: >
       github.event.pull_request.user.login == 'dependabot[bot]'
       && github.event.pull_request.draft == false

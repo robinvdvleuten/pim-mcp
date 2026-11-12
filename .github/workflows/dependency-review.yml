@@ -11,7 +11,7 @@ jobs:
   # Fails a PR that adds a dependency with a critical advisory or a license
   # outside .github/dependency-review.yml.
   dependency-review:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     steps:
       - uses: actions/checkout@v6.0.2
         with:

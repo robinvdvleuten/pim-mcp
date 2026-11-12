@@ -22,7 +22,7 @@ jobs:
   # tags the version and creates the GitHub release.
   release-please:
     if: github.event_name == 'push'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     permissions:
       contents: write
       pull-requests: write
@@ -96,7 +96,7 @@ jobs:
   registry:
     needs: [publish]
     if: ${{ !cancelled() && needs.publish.result == 'success' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     concurrency:
       group: publish
       cancel-in-progress: false

@@ -59,7 +59,7 @@ jobs:
         run: echo "tag=$TAG" >> "$GITHUB_OUTPUT"
         env:
           TAG: ${{ inputs.tag || needs.release-please.outputs.tag_name }}
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@v7.0.1
         with:
           ref: refs/tags/${{ steps.tag.outputs.tag }}
           fetch-depth: 0
@@ -104,7 +104,7 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@v7.0.1
         with:
           ref: refs/tags/${{ needs.publish.outputs.tag }}
           persist-credentials: false

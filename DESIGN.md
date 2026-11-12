@@ -62,7 +62,7 @@ Each record has a decision, the reason for it, and its consequence. If you want 
 
 ## Time zones
 
-**Decision.** A TZID is resolved in this order: the CLDR Windows zone table (generated from CLDR release 49 with `go generate`, and committed), then IANA names, then the VTIMEZONE embedded in the same calendar. A TZID that none of these knows is an error. It is never guessed. Zone data is embedded with `time/tzdata`.
+**Decision.** A TZID is resolved in this order: the CLDR Windows zone table, then IANA names, then the VTIMEZONE embedded in the same calendar. A TZID that none of these knows is an error. It is never guessed. tzatziki does the resolving (see "Discovery and time zones are libraries"). Zone data is embedded with `time/tzdata`, which pim-mcp imports itself, because tzatziki leaves that choice to the program.
 
 **Why.** Real invites carry Windows names such as "W. Europe Standard Time", IANA names, and libical-style prefixed names. A name is more reliable than the sender's embedded definition, because the definition may be out of date. An unknown zone turned into a guess would put an event at the wrong hour without any sign of it. The binary is meant to run in a container with no zone files, so it carries its own.
 
@@ -88,7 +88,7 @@ Each record has a decision, the reason for it, and its consequence. If you want 
 
 **Decision.** A single timed event that pim-mcp creates is written in UTC. A local time without a zone or offset is refused. A recurring timed event is written in the IANA zone the agent names, as `DTSTART;TZID=` and `DTEND;TZID=`, together with a `VTIMEZONE` for that zone, and is refused without a `timezone`. An RFC 3339 start is converted into that zone first. A recurring all-day event has dates and no zone. The rule is an RRULE from the agent, checked with rrule-go and written back from the parsed options. It is refused if it repeats more often than daily, has both `COUNT` and `UNTIL`, has no occurrence, or does not have the start as its first occurrence. `UNTIL` is stored as a UTC date-time for a timed event, and as a date for an all-day one.
 
-**Why.** A single event with no recurrence needs only the instant, so naming a zone would only add a definition to carry. Guessing a zone for a bare local time puts the event at the wrong hour if the guess is wrong. A recurring event is different: "every Monday at 09:00" has to stay at 09:00 when the clocks change, which a fixed UTC time can't do. RFC 5545 requires a `VTIMEZONE` for every `TZID`, so it is generated from Go's own zone data, as one observance for each real clock change from 1 January of the start's year through ten years after it. That avoids inferring rules, and a reader that only has this definition gets the right offset at every moment it covers. A start that the rule would not pick is refused, because RFC 5545 says it should, and otherwise the first occurrence listed would not be the one asked for.
+**Why.** A single event with no recurrence needs only the instant, so naming a zone would only add a definition to carry. Guessing a zone for a bare local time puts the event at the wrong hour if the guess is wrong. A recurring event is different: "every Monday at 09:00" has to stay at 09:00 when the clocks change, which a fixed UTC time can't do. RFC 5545 requires a `VTIMEZONE` for every `TZID`, so tzatziki generates it from Go's own zone data, as one observance for each real clock change from 1 January of the start's year through ten years after it. That avoids inferring rules, and a reader that only has this definition gets the right offset at every moment it covers. A start that the rule would not pick is refused, because RFC 5545 says it should, and otherwise the first occurrence listed would not be the one asked for.
 
 **Consequence.** Other clients show a single event in the viewer's zone, but can't tell which zone the user meant. A recurring event does carry it. After the ten years the definition ends and a client that only has it keeps the last offset, so a series longer than that drifts by an hour in such a client. pim-mcp is not affected, since it reads an IANA name from its own data before it looks at the definition. The definition is not updated later, so editing the series does not extend it. Changing a stored event keeps the zone of the property it replaces, so an imported event with a named zone keeps it. An edit also raises `SEQUENCE` and sets `LAST-MODIFIED`, which makes a later re-import of the original invite a no-op.
 
@@ -146,7 +146,7 @@ Each record has a decision, the reason for it, and its consequence. If you want 
 
 **Why.** Discovery answers come from DNS and websites, which an attacker may control. If they are trusted, the password goes wherever an attacker said. Flags land in shell history and in the process list. A URL with a password in it would be shown by `account_info`.
 
-**Consequence.** Without a terminal, `account add` can't confirm, so you pass `--imap` and `--caldav` yourself. Nothing is sent during discovery except lookups: Mozilla's ISPDB is asked for the domain only, never the full address, and `--no-ispdb` turns it off. The environment variable is visible to anything that can read the process's environment, and it is no help to someone with several accounts.
+**Consequence.** Without a terminal, `account add` can't confirm, so you pass `--imap` and `--caldav` yourself. Discovery is hearsay's, and the confirmation is pim-mcp's, as hearsay asks of its callers. Nothing is sent during discovery except lookups: Mozilla's ISPDB is asked for the domain only, never the full address, and `--no-ispdb` turns it off. The environment variable is visible to anything that can read the process's environment, and it is no help to someone with several accounts.
 
 ## Several accounts
 
@@ -162,7 +162,15 @@ Each record has a decision, the reason for it, and its consequence. If you want 
 
 **Why.** Go's HTTP client keeps the credentials when a redirect only changes the scheme, so a redirect to plain HTTP would send the password in the clear. The loopback exception is what lets the integration tests run against containers.
 
-**Consequence.** A self-hosted server with a self-signed certificate must have its certificate trusted by the machine. The rule lives in one package, `internal/transport`, so that mail, calendar, discovery and config checks cannot disagree.
+**Consequence.** A self-hosted server with a self-signed certificate must have its certificate trusted by the machine. The rule lives in one package, `internal/transport`, so that mail, calendar and config checks cannot disagree. Discovery runs in hearsay, which has its own copy of the same rule, so a change to it has to be made in both.
+
+## Discovery and time zones are libraries
+
+**Decision.** Server discovery is [hearsay](https://github.com/robinvdvleuten/hearsay), and VTIMEZONE reading, writing and TZID resolution are [tzatziki](https://github.com/robinvdvleuten/tzatziki). Both were written here and moved out, and both belong to this project's author.
+
+**Why.** Neither is about MCP, and no other Go package did either job: other programs that read invites or set up mail accounts need the same code. On their own, each has its own tests, fuzzing and releases, and pim-mcp keeps only what is about mail, calendars and agents.
+
+**Consequence.** A fix to discovery or time zones is released there first, then taken in here with a version bump, which Dependabot proposes. Until they reach 1.0, a release may change their API, and pim-mcp changes with it. Their errors name the library, as in `tzatziki: unknown time zone`, and that text can reach an agent.
 
 ## Logging
 

@@ -22,6 +22,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"golang.org/x/term"
 
+	"github.com/robinvdvleuten/hearsay"
 	"github.com/robinvdvleuten/pim-mcp/internal/account"
 	"github.com/robinvdvleuten/pim-mcp/internal/calendar"
 	"github.com/robinvdvleuten/pim-mcp/internal/mail"
@@ -78,16 +79,27 @@ type cachedCalendar struct {
 	client *calendar.Client
 }
 
+// discoverer is hearsay's discovery, behind an interface so tests can replace it.
 type discoverer interface {
-	DiscoverIMAP(ctx context.Context, email string, useISPDB bool) (*account.FoundIMAP, error)
-	DiscoverCalDAV(ctx context.Context, email string) (*account.FoundCalDAV, error)
+	DiscoverIMAP(ctx context.Context, email string, opts hearsay.Options) (hearsay.IMAP, error)
+	DiscoverCalDAV(ctx context.Context, email string, opts hearsay.Options) (hearsay.CalDAV, error)
+}
+
+type hearsayDiscoverer struct{}
+
+func (hearsayDiscoverer) DiscoverIMAP(ctx context.Context, email string, opts hearsay.Options) (hearsay.IMAP, error) {
+	return hearsay.DiscoverIMAP(ctx, email, opts)
+}
+
+func (hearsayDiscoverer) DiscoverCalDAV(ctx context.Context, email string, opts hearsay.Options) (hearsay.CalDAV, error) {
+	return hearsay.DiscoverCalDAV(ctx, email, opts)
 }
 
 func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	c := &cli{
 		stdout:      stdout,
 		stderr:      stderr,
-		discoverer:  &account.Discoverer{},
+		discoverer:  hearsayDiscoverer{},
 		checkIMAP:   checkIMAP,
 		checkCalDAV: checkCalDAV,
 	}

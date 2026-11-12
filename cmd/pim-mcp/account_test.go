@@ -11,6 +11,7 @@ import (
 
 	"github.com/zalando/go-keyring"
 
+	"github.com/robinvdvleuten/hearsay"
 	"github.com/robinvdvleuten/pim-mcp/internal/account"
 )
 
@@ -25,27 +26,27 @@ var addArgs = []string{
 
 // fakeDiscoverer finds what it is given, and nothing if it is given nothing.
 type fakeDiscoverer struct {
-	imap     *account.FoundIMAP
-	caldav   *account.FoundCalDAV
+	imap     *hearsay.IMAP
+	caldav   *hearsay.CalDAV
 	useISPDB bool
 	calls    int
 }
 
-func (f *fakeDiscoverer) DiscoverIMAP(_ context.Context, _ string, useISPDB bool) (*account.FoundIMAP, error) {
+func (f *fakeDiscoverer) DiscoverIMAP(_ context.Context, _ string, opts hearsay.Options) (hearsay.IMAP, error) {
 	f.calls++
-	f.useISPDB = useISPDB
+	f.useISPDB = !opts.SkipISPDB
 	if f.imap == nil {
-		return nil, account.ErrNotDiscovered
+		return hearsay.IMAP{}, hearsay.ErrNotFound
 	}
-	return f.imap, nil
+	return *f.imap, nil
 }
 
-func (f *fakeDiscoverer) DiscoverCalDAV(context.Context, string) (*account.FoundCalDAV, error) {
+func (f *fakeDiscoverer) DiscoverCalDAV(context.Context, string, hearsay.Options) (hearsay.CalDAV, error) {
 	f.calls++
 	if f.caldav == nil {
-		return nil, account.ErrNotDiscovered
+		return hearsay.CalDAV{}, hearsay.ErrNotFound
 	}
-	return f.caldav, nil
+	return *f.caldav, nil
 }
 
 type harness struct {
@@ -403,14 +404,15 @@ func TestAccountBadUsage(t *testing.T) {
 
 func discovered() *fakeDiscoverer {
 	return &fakeDiscoverer{
-		imap: &account.FoundIMAP{
-			IMAP:     account.IMAP{Addr: "imap.found.example.org:143", Security: account.SecurityStartTLS},
+		imap: &hearsay.IMAP{
+			Addr:     "imap.found.example.org:143",
+			Security: hearsay.SecurityStartTLS,
 			Username: "found-user",
-			Source:   account.SourceAutoconfig,
+			Source:   hearsay.SourceAutoconfig,
 		},
-		caldav: &account.FoundCalDAV{
-			CalDAV: account.CalDAV{URL: "https://dav.found.example.org/"},
-			Source: account.SourceWellKnown,
+		caldav: &hearsay.CalDAV{
+			URL:    "https://dav.found.example.org/",
+			Source: hearsay.SourceWellKnown,
 		},
 	}
 }
@@ -439,7 +441,7 @@ func TestAccountAddDiscoversAndConfirmsBeforeAskingForThePassword(t *testing.T) 
 	if strings.Join(order, ",") != "confirm,password" {
 		t.Errorf("order = %v, want the confirmation before the password", order)
 	}
-	for _, want := range []string{"imap.found.example.org:143", "starttls", "https://dav.found.example.org/", "found-user", account.SourceAutoconfig, account.SourceWellKnown} {
+	for _, want := range []string{"imap.found.example.org:143", "starttls", "https://dav.found.example.org/", "found-user", string(hearsay.SourceAutoconfig), string(hearsay.SourceWellKnown)} {
 		if !strings.Contains(h.stdout.String(), want) {
 			t.Errorf("output %q doesn't mention %q", h.stdout.String(), want)
 		}
@@ -534,7 +536,7 @@ func TestAccountAddFlagsForEverythingNeedNoConfirmation(t *testing.T) {
 func TestAccountAddDiscoveredPlainTransportIsRefused(t *testing.T) {
 	h := newHarness(t)
 	fake := discovered()
-	fake.caldav.CalDAV.URL = "http://dav.found.example.org/"
+	fake.caldav.URL = "http://dav.found.example.org/"
 	h.cli.discoverer = fake
 	h.answer = true
 

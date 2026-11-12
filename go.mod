@@ -10,6 +10,8 @@ require (
 	github.com/emersion/go-message v0.18.2
 	github.com/google/jsonschema-go v0.4.3
 	github.com/modelcontextprotocol/go-sdk v1.8.0
+	github.com/robinvdvleuten/hearsay v0.1.0
+	github.com/robinvdvleuten/tzatziki v0.1.1
 	github.com/teambition/rrule-go v1.8.2
 	github.com/zalando/go-keyring v0.2.8
 	golang.org/x/net v0.62.0

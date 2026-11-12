@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/robinvdvleuten/hearsay"
 	"github.com/robinvdvleuten/pim-mcp/internal/account"
 	"github.com/robinvdvleuten/pim-mcp/internal/calendar"
 	"github.com/robinvdvleuten/pim-mcp/internal/mail"
@@ -144,23 +145,24 @@ func (c *cli) accountAdd(ctx context.Context, args []string) int {
 // found. An explicit flag always wins.
 func (c *cli) discover(ctx context.Context, a *account.Account, useISPDB bool) (string, error) {
 	var found strings.Builder
+	opts := hearsay.Options{SkipISPDB: !useISPDB}
 	if a.IMAP.Addr == "" {
-		imap, err := c.discoverer.DiscoverIMAP(ctx, a.Email, useISPDB)
+		imap, err := c.discoverer.DiscoverIMAP(ctx, a.Email, opts)
 		if err != nil {
 			return "", fmt.Errorf("%w, pass --imap", err)
 		}
-		a.IMAP = imap.IMAP
+		a.IMAP = account.IMAP{Addr: imap.Addr, Security: string(imap.Security)}
 		if a.Username == "" {
 			a.Username = imap.Username
 		}
 		fmt.Fprintf(&found, "  imap:     %s (%s), from %s\n", a.IMAP.Addr, a.IMAP.Security, imap.Source)
 	}
 	if a.CalDAV.URL == "" {
-		caldav, err := c.discoverer.DiscoverCalDAV(ctx, a.Email)
+		caldav, err := c.discoverer.DiscoverCalDAV(ctx, a.Email, opts)
 		if err != nil {
 			return "", fmt.Errorf("%w, pass --caldav", err)
 		}
-		a.CalDAV = caldav.CalDAV
+		a.CalDAV = account.CalDAV{URL: caldav.URL}
 		fmt.Fprintf(&found, "  caldav:   %s, from %s\n", a.CalDAV.URL, caldav.Source)
 	}
 	return found.String(), nil

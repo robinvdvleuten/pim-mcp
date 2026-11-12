@@ -176,7 +176,7 @@ func checkFirstOccurrence(option rrule.ROption, fields EventFields) error {
 	if err != nil {
 		return fmt.Errorf("recurrence isn't a valid rule: %w", err)
 	}
-	first, ok, err := nextInstance(rule.Iterator())
+	first, ok, err := instances(rule)()
 	switch {
 	case err != nil:
 		return fmt.Errorf("recurrence isn't a valid rule: %w", err)

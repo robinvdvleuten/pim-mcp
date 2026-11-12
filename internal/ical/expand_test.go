@@ -250,4 +250,11 @@ func TestMalformedInputIsAnErrorNotAPanic(t *testing.T) {
 	if _, err := ParseInvite([]byte(yearZero), time.UTC); err == nil {
 		t.Error("a rule starting in the year 0 was accepted")
 	}
+	// rrule-go panics on this one before the first instance, when the iterator
+	// sets up October and looks for its 20th Saturday.
+	twentiethSaturday := "BEGIN:VCALENDAR\nVERSION:2.0\nBEGIN:VEVENT\nUID:x\nDTSTART:20261017T090000Z\n" +
+		"RRULE:FREQ=YEARLY;BYDAY=20SA;BYMONTH=10\nEND:VEVENT\nEND:VCALENDAR"
+	if _, err := ParseInvite([]byte(twentiethSaturday), time.UTC); err == nil {
+		t.Error("a rule asking for the 20th Saturday of a month was accepted")
+	}
 }

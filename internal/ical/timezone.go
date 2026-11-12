@@ -269,12 +269,12 @@ func observanceOnsets(component *goical.Component, from int) ([]time.Time, error
 	if err != nil {
 		return nil, fmt.Errorf("read definition's RRULE: %w", err)
 	}
-	next := rule.Iterator()
+	next := instances(rule)
 	for step := 0; ; step++ {
 		if step >= maxZoneSteps {
 			return nil, ErrRuleTooExpensive
 		}
-		at, ok, err := nextInstance(next)
+		at, ok, err := next()
 		if err != nil {
 			return nil, fmt.Errorf("read definition's RRULE: %w", err)
 		}

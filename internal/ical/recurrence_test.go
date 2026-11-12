@@ -72,6 +72,7 @@ func TestRecurrenceRule(t *testing.T) {
 		{name: "start on another weekday than the rule", fields: timed(amsterdam, 2026, 10, 20, 9), rule: "FREQ=WEEKLY;BYDAY=MO", wantErr: "isn't an occurrence"},
 		{name: "start at another hour than the rule", fields: monday, rule: "FREQ=DAILY;BYHOUR=10", wantErr: "isn't an occurrence"},
 		{name: "all-day start on another weekday", fields: allDay(2026, 11, 3), rule: "FREQ=WEEKLY;BYDAY=MO", wantErr: "isn't an occurrence"},
+		{name: "a weekday the month doesn't have", fields: timed(amsterdam, 2026, 10, 17, 9), rule: "FREQ=YEARLY;BYDAY=20SA;BYMONTH=10", wantErr: "isn't a valid rule"},
 		{name: "no date matches", fields: monday, rule: "FREQ=YEARLY;BYMONTH=2;BYMONTHDAY=30", wantErr: "no occurrence"},
 		{name: "ends before it starts", fields: monday, rule: "FREQ=DAILY;UNTIL=20200101", wantErr: "no occurrence"},
 		{name: "timed without a zone", fields: EventFields{Start: monday.Start, End: monday.End}, rule: "FREQ=DAILY", wantErr: "time zone"},

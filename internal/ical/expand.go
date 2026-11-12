@@ -243,12 +243,12 @@ func expandMaster(z *zones, event *goical.Event, overridden map[int64]bool, rang
 			return nil, err
 		}
 	} else {
-		next := rule.Iterator()
+		next := instances(rule)
 		for step := 0; ; step++ {
 			if step >= maxRuleSteps {
 				return nil, ErrRuleTooExpensive
 			}
-			at, ok, err := nextInstance(next)
+			at, ok, err := next()
 			if err != nil {
 				return nil, err
 			}
@@ -272,16 +272,24 @@ func expandMaster(z *zones, event *goical.Event, overridden map[int64]bool, rang
 // ErrRuleUnusable means the recurrence library gave up on a rule.
 var ErrRuleUnusable = errors.New("the recurrence rule can't be worked out")
 
-// nextInstance asks a rule for its next instance. rrule-go panics on some rules
-// it accepted, such as one starting in the year 0, and rules come from strangers.
-func nextInstance(next rrule.Next) (at time.Time, ok bool, err error) {
-	defer func() {
-		if recover() != nil {
-			at, ok, err = time.Time{}, false, ErrRuleUnusable
+// instances returns a function that gives a rule's instances in order. rrule-go
+// panics on some rules it accepted, both when it starts and while it iterates,
+// such as one starting in the year 0 or asking for the 20th Saturday of a
+// month. Rules come from strangers, so a panic becomes ErrRuleUnusable.
+func instances(rule *rrule.RRule) func() (time.Time, bool, error) {
+	var next rrule.Next
+	return func() (at time.Time, ok bool, err error) {
+		defer func() {
+			if recover() != nil {
+				at, ok, err = time.Time{}, false, ErrRuleUnusable
+			}
+		}()
+		if next == nil {
+			next = rule.Iterator()
 		}
-	}()
-	at, ok = next()
-	return at, ok, nil
+		at, ok = next()
+		return at, ok, nil
+	}
 }
 
 // readEvent returns an event's shared fields, its start and its length.

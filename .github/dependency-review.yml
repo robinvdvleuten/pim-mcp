@@ -1,0 +1,9 @@
+fail_on_severity: critical
+# golang.org/x/net and golang.org/x/term are BSD-3-Clause, go-spew is ISC and
+# godbus is BSD-2-Clause, so these need to be allowed too.
+allow_licenses:
+  - Apache-2.0
+  - BSD-2-Clause
+  - BSD-3-Clause
+  - ISC
+  - MIT

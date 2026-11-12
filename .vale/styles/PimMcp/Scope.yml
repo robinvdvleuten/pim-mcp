@@ -1,4 +1,6 @@
 extends: Commitlint.Scope
-message: "Drop the scope '%s'; this project does not use commit scopes."
+# A scope names the area a commit changes: a package under internal/, cli for
+# cmd/pim-mcp, integration for test/integration, or deps for dependency bumps.
+message: "'%s' is not one of the scopes: account, calendar, cli, deps, ical, importer, integration, mail, mcpserver, transport."
 raw:
-  - '(?<=^\w+\()[^()]+(?=\))'
+  - '(?<=^\w+\()(?!(?:account|calendar|cli|deps|ical|importer|integration|mail|mcpserver|transport)\))[^()]+(?=\))'

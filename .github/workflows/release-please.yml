@@ -66,6 +66,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@v6.4.0
         with:
+          cache: false
           go-version-file: go.mod
       - run: go test -race ./...
       - uses: sigstore/cosign-installer@v4.1.2

@@ -44,7 +44,7 @@ dockers_v2:
       "org.opencontainers.image.revision": "{{ .FullCommit }}"
       "org.opencontainers.image.version": "{{ .Version }}"
       "org.opencontainers.image.source": "{{ .GitURL }}"
-      "org.opencontainers.image.licenses": "Apache-2.0"
+      "org.opencontainers.image.licenses": "MIT"
       # The MCP registry checks that the image belongs to the server in
       # server.json by this label.
       "io.modelcontextprotocol.server.name": "io.github.robinvdvleuten/pim-mcp"
@@ -54,7 +54,7 @@ nfpms:
     homepage: https://github.com/robinvdvleuten/pim-mcp
     maintainer: Robin van der Vleuten <robin@webstronauts.com>
     description: MCP server for your own mail and calendar servers
-    license: Apache-2.0
+    license: MIT
     formats:
       - deb
       - rpm

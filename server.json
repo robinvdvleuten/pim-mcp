@@ -7,7 +7,7 @@
     "url": "https://github.com/robinvdvleuten/pim-mcp",
     "source": "github"
   },
-  "version": "0.0.0",
+  "version": "0.1.0",
   "packages": [
     {
       "registryType": "oci",
@@ -41,7 +41,9 @@
         {
           "name": "PIM_MCP_READ_ONLY",
           "description": "Set to 1 to remove every tool that can change something.",
-          "choices": ["1"]
+          "choices": [
+            "1"
+          ]
         }
       ]
     }

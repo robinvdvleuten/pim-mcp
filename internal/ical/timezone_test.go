@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/robinvdvleuten/pim-mcp/internal/testtime"
 )
 
 func location(t *testing.T, name string) *time.Location {
@@ -232,25 +234,33 @@ func TestBadZones(t *testing.T) {
 		{"bad offset", badOffset, "Broken", "Broken"},
 	}
 
+	expand := func(t *testing.T, vtimezone, tzid string) error {
+		event := parseEvent(t, "DTSTART;TZID="+tzid+":20261110T090000")
+		if vtimezone != "" {
+			event = strings.Replace(event, "BEGIN:VEVENT", vtimezone+"\r\nBEGIN:VEVENT", 1)
+		}
+		cal, err := Parse([]byte(event))
+		if err != nil {
+			t.Fatalf("parse: %v", err)
+		}
+		_, err = Expand(cal, date(t, "2026-11-01T00:00:00Z"), date(t, "2026-12-01T00:00:00Z"), time.UTC)
+		return err
+	}
+	// A bad zone fails as fast as a good one takes, give or take the steps the
+	// zone's rule may run; without that bound a rule every second runs for hours.
+	normal := testtime.Fastest(func() {
+		_ = expand(t, strings.Replace(everySecond, "RRULE:FREQ=SECONDLY", "RRULE:FREQ=YEARLY;BYMONTH=10;BYDAY=-1SU", 1), "Hostile")
+	})
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			event := parseEvent(t, "DTSTART;TZID="+tt.tzid+":20261110T090000")
-			if tt.vtimezone != "" {
-				event = strings.Replace(event, "BEGIN:VEVENT", tt.vtimezone+"\r\nBEGIN:VEVENT", 1)
-			}
-			cal, err := Parse([]byte(event))
-			if err != nil {
-				t.Fatalf("parse: %v", err)
-			}
-
-			started := time.Now()
-			_, err = Expand(cal, date(t, "2026-11-01T00:00:00Z"), date(t, "2026-12-01T00:00:00Z"), time.UTC)
+			err := expand(t, tt.vtimezone, tt.tzid)
 
 			if err == nil || !strings.Contains(err.Error(), tt.want) {
 				t.Errorf("err = %v, want it to mention %q", err, tt.want)
 			}
-			if elapsed := time.Since(started); elapsed > 5*time.Second {
-				t.Errorf("took %s", elapsed)
+			if took := testtime.Fastest(func() { _ = expand(t, tt.vtimezone, tt.tzid) }); took > 50*normal {
+				t.Errorf("took %s, against %s for a zone with a normal rule", took, normal)
 			}
 		})
 	}

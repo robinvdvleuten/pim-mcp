@@ -3,8 +3,11 @@ package ical
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/robinvdvleuten/pim-mcp/internal/testtime"
 )
 
 // seedInvites adds the shared invite fixtures, which are modelled on real mail.
@@ -56,6 +59,18 @@ func FuzzExpand(f *testing.F) {
 	start := time.Date(2026, 1, 1, 0, 0, 0, 0, loc)
 	end := start.AddDate(1, 0, 0)
 
+	// The step limit bounds what one event may cost. A rule that walks a tenth
+	// of it is measured on this machine, so the budget is ten times the worst
+	// case the limit allows. Anything slower got past the limit.
+	tenth := secondlyFrom(start.Add(-maxRuleSteps / 10 * time.Second))
+	budget := 100 * testtime.Fastest(func() {
+		cal, err := Parse(tenth)
+		if err != nil {
+			f.Fatal(err)
+		}
+		_, _ = Expand(cal, start, end, loc)
+	})
+
 	f.Fuzz(func(t *testing.T, data []byte) {
 		cal, err := Parse(data)
 		if err != nil {
@@ -63,8 +78,8 @@ func FuzzExpand(f *testing.F) {
 		}
 		began := time.Now()
 		occurrences, err := Expand(cal, start, end, loc)
-		if took := time.Since(began); took > 5*time.Second {
-			t.Fatalf("Expand took %v", took)
+		if took := time.Since(began); took > budget {
+			t.Fatalf("Expand took %v, the budget is %v", took, budget)
 		}
 		if err != nil {
 			return
@@ -78,4 +93,14 @@ func FuzzExpand(f *testing.F) {
 			}
 		}
 	})
+}
+
+// secondlyFrom is a calendar with one event that repeats every second from
+// start, so expanding it walks every second up to the range.
+func secondlyFrom(start time.Time) []byte {
+	return []byte(strings.Join([]string{
+		"BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//pim-mcp//test//EN", "BEGIN:VEVENT", "UID:secondly",
+		"DTSTAMP:20250101T000000Z", "DTSTART:" + start.UTC().Format(utcFormat),
+		"DTEND:" + start.Add(time.Second).UTC().Format(utcFormat), "RRULE:FREQ=SECONDLY", "END:VEVENT", "END:VCALENDAR", "",
+	}, "\r\n"))
 }

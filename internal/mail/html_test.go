@@ -2,11 +2,12 @@ package mail
 
 import (
 	"errors"
-	"math"
 	"slices"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/robinvdvleuten/pim-mcp/internal/testtime"
 )
 
 func TestHTMLToText(t *testing.T) {
@@ -72,17 +73,22 @@ func TestHTMLToTextSurvivesHostileInput(t *testing.T) {
 		"unterminated script": "<script>" + strings.Repeat("x", 1_000_000),
 	}
 
+	// Linear work stays within a small factor of plain text of the same length;
+	// a walk over the open elements would be thousands of times slower. Plain
+	// text is measured once, and a case's budget scales with its length.
+	const textBytes = 1_000_000
+	text := testtime.Fastest(func() { htmlToText(strings.Repeat("a", textBytes)) })
+
 	for name, src := range tests {
 		t.Run(name, func(t *testing.T) {
-			started := time.Now()
+			var got string
+			took := testtime.Fastest(func() { got = htmlToText(src) })
 
-			got := htmlToText(src)
-
-			if elapsed := time.Since(started); elapsed > 5*time.Second {
-				t.Errorf("took %v", elapsed)
-			}
 			if strings.Contains(got, "secret") {
 				t.Error("hidden text came through")
+			}
+			if budget := 10 * text * time.Duration(len(src)) / textBytes; took > budget {
+				t.Errorf("took %s, against a budget of %s from plain text", took, budget)
 			}
 		})
 	}
@@ -130,24 +136,11 @@ func TestHTMLToTextHiddenRegionsCostTheSameForAnyMarkup(t *testing.T) {
 	// Measured against plain text of the same length on the same machine, so a
 	// slow CI runner or the race detector doesn't fail it. The walk made this
 	// input thousands of times slower; linear work stays within a small factor.
-	hidden := fastest(func() { htmlToText(src) })
-	text := fastest(func() { htmlToText(strings.Repeat("a", len(src))) })
+	hidden := testtime.Fastest(func() { htmlToText(src) })
+	text := testtime.Fastest(func() { htmlToText(strings.Repeat("a", len(src))) })
 	if hidden > 10*text {
 		t.Errorf("took %s, against %s for plain text of the same length", hidden, text)
 	}
-}
-
-// fastest runs f once to warm up, then three more times, and returns the
-// shortest, so one pause of the machine doesn't decide a timing test.
-func fastest(f func()) time.Duration {
-	f()
-	best := time.Duration(math.MaxInt64)
-	for range 3 {
-		started := time.Now()
-		f()
-		best = min(best, time.Since(started))
-	}
-	return best
 }
 
 func TestHTMLToTextHiddenRegionEndsAtItsOwnEndTag(t *testing.T) {

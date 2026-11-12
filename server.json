@@ -1,0 +1,49 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.robinvdvleuten/pim-mcp",
+  "title": "pim-mcp",
+  "description": "Read your mail and manage your calendar on your own IMAP and CalDAV servers.",
+  "repository": {
+    "url": "https://github.com/robinvdvleuten/pim-mcp",
+    "source": "github"
+  },
+  "version": "0.0.0",
+  "packages": [
+    {
+      "registryType": "oci",
+      "identifier": "ghcr.io/robinvdvleuten/pim-mcp",
+      "transport": {
+        "type": "stdio"
+      },
+      "runtimeArguments": [
+        {
+          "type": "named",
+          "name": "--mount",
+          "description": "The directory that holds the account settings, made with `pim-mcp account add`.",
+          "value": "type=bind,src={config_dir},dst=/home/nonroot/.config/pim-mcp",
+          "isRequired": true,
+          "variables": {
+            "config_dir": {
+              "description": "The settings directory on the host.",
+              "format": "filepath",
+              "isRequired": true
+            }
+          }
+        }
+      ],
+      "environmentVariables": [
+        {
+          "name": "PIM_MCP_PASSWORD",
+          "description": "The account password. A container has no keychain, so this is needed. Only works with a single account.",
+          "isRequired": true,
+          "isSecret": true
+        },
+        {
+          "name": "PIM_MCP_READ_ONLY",
+          "description": "Set to 1 to remove every tool that can change something.",
+          "choices": ["1"]
+        }
+      ]
+    }
+  ]
+}

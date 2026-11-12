@@ -9,8 +9,11 @@ builds:
     binary: pim-mcp
     env:
       - CGO_ENABLED=0
+    # The version comes from the tag the go command stamps into the build
+    # info, so no -X flags are needed.
     flags:
       - -trimpath
+    ldflags: -s -w
     goos: [linux, darwin, windows]
     goarch: [amd64, arm64]
     ignore:
@@ -28,9 +31,89 @@ archives:
       - LICENSE
       - README.md
 
+dockers_v2:
+  - images:
+      - "ghcr.io/robinvdvleuten/pim-mcp"
+    tags:
+      - "v{{ .Version }}"
+      - latest
+    labels:
+      "org.opencontainers.image.description": "MCP server for your own mail and calendar servers"
+      "org.opencontainers.image.created": "{{ .Date }}"
+      "org.opencontainers.image.name": "{{ .ProjectName }}"
+      "org.opencontainers.image.revision": "{{ .FullCommit }}"
+      "org.opencontainers.image.version": "{{ .Version }}"
+      "org.opencontainers.image.source": "{{ .GitURL }}"
+      "org.opencontainers.image.licenses": "Apache-2.0"
+      # The MCP registry checks that the image belongs to the server in
+      # server.json by this label.
+      "io.modelcontextprotocol.server.name": "io.github.robinvdvleuten/pim-mcp"
+
+nfpms:
+  - vendor: robinvdvleuten
+    homepage: https://github.com/robinvdvleuten/pim-mcp
+    maintainer: Robin van der Vleuten <robin@webstronauts.com>
+    description: MCP server for your own mail and calendar servers
+    license: Apache-2.0
+    formats:
+      - deb
+      - rpm
+      - apk
+    bindir: /usr/bin
+
+homebrew_casks:
+  - repository:
+      owner: robinvdvleuten
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TOKEN }}"
+    binary: pim-mcp
+    hooks:
+      post:
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr",
+              args: ["-dr", "com.apple.quarantine", "#{staged_path}/pim-mcp"]
+          end
+    commit_author:
+      name: "Robin van der Vleuten"
+      email: "robin@webstronauts.com"
+    homepage: "https://github.com/robinvdvleuten/pim-mcp"
+    description: "MCP server for your own mail and calendar servers"
+    skip_upload: auto
+
+sboms:
+  - artifacts: archive
+
 checksum:
   name_template: checksums.txt
   algorithm: sha256
 
+signs:
+  - artifacts: checksum
+    signature: "${artifact}.sigstore.json"
+    output: true
+    cmd: cosign
+    args:
+      - sign-blob
+      - "--bundle=${signature}"
+      - "${artifact}"
+      - --yes
+
+docker_signs:
+  - artifacts: manifests
+    output: true
+    cmd: cosign
+    args:
+      - sign
+      - "${artifact}@${digest}"
+      - --yes
+
+# release-please creates the release and writes CHANGELOG.md; GoReleaser only
+# attaches the artifacts.
+release:
+  mode: keep-existing
+  # A re-run of a failed publish uploads over what the first run left.
+  replace_existing_artifacts: true
+
 changelog:
-  use: github
+  disable: true

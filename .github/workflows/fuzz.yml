@@ -39,7 +39,7 @@ jobs:
       - run: go test -run '^$' -fuzz '^${{ matrix.target }}$' -fuzztime 30s -fuzzminimizetime 1m ./internal/${{ matrix.package }}/
       # The failing input, to reproduce with: go test -run <target>/<name>
       - if: failure()
-        uses: actions/upload-artifact@v7.0.1
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: crasher-${{ matrix.target }}
           path: internal/${{ matrix.package }}/testdata/fuzz/

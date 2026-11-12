@@ -120,7 +120,7 @@ Each record has a decision, the reason for it, and its consequence. If you want 
 
 **Decision.** A request that would go over a limit fails with an error that says what the limit is. The exception is where cutting is the point, and then the result says it was cut. Limits: ranges of 366 days; 1000 occurrences per query; messages of 25 MiB; calendar parts of 1 MiB; message bodies of 64 KiB, with `body_truncated` set; CalDAV responses of 16 MiB; mail searches that must read messages stop after 2000; search results of 50, with `more` set; recurrence rules are bounded in steps and in age.
 
-**Why.** An agent that is handed part of a list as if it were the whole will give wrong answers with confidence. Free/busy computed from a cut list would claim time is free. Invites come from strangers, so the rules that expand them must also be bounded in cost. The libraries that parse calendar data and expand rules panic on some malformed input, which fuzzing found, so a panic there is caught and returned as an error like any other.
+**Why.** An agent that is handed part of a list as if it were the whole will give wrong answers with confidence. Free/busy computed from a cut list would claim time is free. Invites come from strangers, so the rules that expand them must also be bounded in cost. The library that expands rules panics on some malformed rules, which fuzzing found, so a panic there is caught and returned as an error like any other. The calendar parser had the same problem until go-ical fixed it upstream.
 
 **Consequence.** Callers sometimes have to ask again with a shorter range. Searches by calendar part or exact date can't be answered by the server, so they read messages in batches of 100, which is why the scan limit exists.
 

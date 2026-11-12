@@ -2,6 +2,7 @@ package mail
 
 import (
 	"errors"
+	"math"
 	"slices"
 	"strings"
 	"testing"
@@ -121,14 +122,32 @@ func TestReadablePart(t *testing.T) {
 func TestHTMLToTextHiddenRegionsCostTheSameForAnyMarkup(t *testing.T) {
 	// Unmatched end tags inside a hidden element once meant a walk over every
 	// open element for each of them.
-	src := `<div hidden>` + strings.Repeat("<i>", 400_000) + strings.Repeat("</b>", 400_000) + `</div>shown`
-	started := time.Now()
+	src := `<div hidden>` + strings.Repeat("<i>", 100_000) + strings.Repeat("</b>", 100_000) + `</div>shown`
 	if got := htmlToText(src); got != "shown" {
 		t.Errorf("got %.40q", got)
 	}
-	if took := time.Since(started); took > 5*time.Second {
-		t.Errorf("took %s", took)
+
+	// Measured against plain text of the same length on the same machine, so a
+	// slow CI runner or the race detector doesn't fail it. The walk made this
+	// input thousands of times slower; linear work stays within a small factor.
+	hidden := fastest(func() { htmlToText(src) })
+	text := fastest(func() { htmlToText(strings.Repeat("a", len(src))) })
+	if hidden > 10*text {
+		t.Errorf("took %s, against %s for plain text of the same length", hidden, text)
 	}
+}
+
+// fastest runs f once to warm up, then three more times, and returns the
+// shortest, so one pause of the machine doesn't decide a timing test.
+func fastest(f func()) time.Duration {
+	f()
+	best := time.Duration(math.MaxInt64)
+	for range 3 {
+		started := time.Now()
+		f()
+		best = min(best, time.Since(started))
+	}
+	return best
 }
 
 func TestHTMLToTextHiddenRegionEndsAtItsOwnEndTag(t *testing.T) {

@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/robinvdvleuten/pim-mcp/internal/account"
+	"github.com/robinvdvleuten/hearsay"
 )
 
 type noDNS struct{}
@@ -59,18 +59,17 @@ func TestDiscoveryFindsRealCalDAVServers(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			d := &account.Discoverer{Resolver: noDNS{}, Transport: toLocal{tt.addr}}
-
-			found, err := d.DiscoverCalDAV(t.Context(), "tester@example.org")
+			found, err := hearsay.DiscoverCalDAV(t.Context(), "tester@example.org",
+				hearsay.Options{Resolver: noDNS{}, Transport: toLocal{tt.addr}})
 			if err != nil {
 				t.Fatalf("discover: %v", err)
 			}
 
-			if found.Source != account.SourceWellKnown {
+			if found.Source != hearsay.SourceWellKnown {
 				t.Errorf("source = %q", found.Source)
 			}
-			if found.CalDAV.URL != tt.want {
-				t.Errorf("url = %q, want %q", found.CalDAV.URL, tt.want)
+			if found.URL != tt.want {
+				t.Errorf("url = %q, want %q", found.URL, tt.want)
 			}
 		})
 	}

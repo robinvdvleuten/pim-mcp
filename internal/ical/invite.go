@@ -11,6 +11,7 @@ import (
 	"time"
 
 	goical "github.com/emersion/go-ical"
+	"github.com/robinvdvleuten/tzatziki"
 )
 
 // The iTIP methods (RFC 5546) that can be imported.
@@ -192,14 +193,14 @@ func normalizeComponent(component *goical.Component) {
 	}
 	for _, props := range component.Props {
 		for i := range props {
-			if mapped, ok := windowsZones[props[i].Params.Get(goical.PropTimezoneID)]; ok {
+			if mapped, ok := tzatziki.WindowsToIANA(props[i].Params.Get(goical.PropTimezoneID)); ok {
 				props[i].Params.Set(goical.PropTimezoneID, mapped)
 			}
 		}
 	}
 	if component.Name == goical.CompTimezone {
 		if prop := component.Props.Get(goical.PropTimezoneID); prop != nil {
-			if mapped, ok := windowsZones[prop.Value]; ok {
+			if mapped, ok := tzatziki.WindowsToIANA(prop.Value); ok {
 				prop.Value = mapped
 			}
 		}

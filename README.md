@@ -31,32 +31,26 @@ Agent:  calendar_import_from_email → created
 
 ## Getting started
 
-You need [Go](https://go.dev/dl/), which downloads the exact version this project needs by itself, and an MCP client such as Claude Code.
+You need an MCP client such as Claude Code.
 
-**1. Build it:**
-
-```bash
-git clone https://github.com/robinvdvleuten/pim-mcp.git
-```
+**1. Install it** with [Homebrew](https://brew.sh):
 
 ```bash
-cd pim-mcp
+brew install --cask robinvdvleuten/tap/pim-mcp
 ```
 
-```bash
-go build -o pim-mcp ./cmd/pim-mcp
-```
+Each [release](https://github.com/robinvdvleuten/pim-mcp/releases/latest) also has archives for macOS, Linux and Windows, and `.deb`, `.rpm` and `.apk` packages. To run it in Docker instead, see [Docker](#docker).
 
 **2. Add your account.** It shows the servers it found and asks before your password goes there. If your provider has app passwords, use one. To add another account later, run the same command with its address. The first account you add is the default.
 
 ```bash
-./pim-mcp account add --email you@example.org
+pim-mcp account add --email you@example.org
 ```
 
 **3. Check that it can log in:**
 
 ```bash
-./pim-mcp account test
+pim-mcp account test
 ```
 
 ```text
@@ -67,12 +61,48 @@ caldav: ok
 **4. Connect your MCP client,** read-only to begin with. For Claude Code:
 
 ```bash
-claude mcp add pim -- "$(pwd)/pim-mcp" serve --read-only
+claude mcp add pim -- "$(command -v pim-mcp)" serve --read-only
 ```
 
 **5. Ask your agent** something like "What's on my calendar next week?"
 
 When you're happy with what it does, add the server again without `--read-only` to allow changes.
+
+### Docker
+
+The image is `ghcr.io/robinvdvleuten/pim-mcp`. A container has no keychain, so the password comes from `PIM_MCP_PASSWORD`, which limits you to one account. The account settings live in a folder on your machine that each container mounts.
+
+Put the password in your shell without it going into your history:
+
+```bash
+read -rs PIM_MCP_PASSWORD && export PIM_MCP_PASSWORD
+```
+
+Add the account and check it:
+
+```bash
+docker run -it --rm -e PIM_MCP_PASSWORD -v "$HOME/.config/pim-mcp:/home/nonroot/.config/pim-mcp" ghcr.io/robinvdvleuten/pim-mcp account add --email you@example.org
+```
+
+```bash
+docker run --rm -e PIM_MCP_PASSWORD -v "$HOME/.config/pim-mcp:/home/nonroot/.config/pim-mcp" ghcr.io/robinvdvleuten/pim-mcp account test
+```
+
+Connect Claude Code. This stores the password in Claude Code's own settings:
+
+```bash
+claude mcp add pim -e PIM_MCP_PASSWORD="$PIM_MCP_PASSWORD" -- docker run -i --rm -e PIM_MCP_PASSWORD -v "$HOME/.config/pim-mcp:/home/nonroot/.config/pim-mcp" ghcr.io/robinvdvleuten/pim-mcp serve --read-only
+```
+
+The container runs as user 65532. On Linux without Docker Desktop, that user needs to own the folder: `sudo chown 65532 ~/.config/pim-mcp`.
+
+### From source
+
+With [Go](https://go.dev/dl/), which downloads the exact version this project needs by itself:
+
+```bash
+go install github.com/robinvdvleuten/pim-mcp/cmd/pim-mcp@latest
+```
 
 ---
 
@@ -145,7 +175,7 @@ Invites and mail are treated as hostile input:
 **Finding servers.** `account add` tries built-in settings for mailbox.org, Fastmail and Posteo, then DNS, then the well-known locations providers publish. To skip this, name the servers yourself:
 
 ```bash
-./pim-mcp account add --email you@example.org --username you --imap mail.example.org:993 --caldav https://dav.example.org/
+pim-mcp account add --email you@example.org --username you --imap mail.example.org:993 --caldav https://dav.example.org/
 ```
 
 One lookup, Mozilla's ISPDB, tells Mozilla your email domain. `--no-ispdb` turns it off. Your full address is never sent during discovery.

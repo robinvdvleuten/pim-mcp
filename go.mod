@@ -6,7 +6,7 @@ toolchain go1.27.4
 
 require (
 	github.com/emersion/go-ical v0.0.0-20261112170022-46c5b53a1723
-	github.com/emersion/go-imap/v2 v2.0.0-beta.8
+	github.com/emersion/go-imap/v2 v2.0.0-beta.9
 	github.com/emersion/go-message v0.18.2
 	github.com/google/jsonschema-go v0.4.3
 	github.com/modelcontextprotocol/go-sdk v1.8.0
